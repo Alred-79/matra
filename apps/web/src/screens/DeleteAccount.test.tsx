@@ -1,7 +1,7 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { MemoryRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { describe, expect, it, vi } from 'vitest';
 import { useSession } from '../lib/session';
 import { fakeAuthFetch } from '../test/fakeServer';
 import { Harness, current } from '../test/sessionHarness';
@@ -14,15 +14,24 @@ function Home() {
 
 const PASS = 'acorn-maple-violin-otter-quartz';
 
-async function setup(opts: { deleteFails?: boolean } = {}) {
+async function setup(opts: { deleteFails?: boolean; holdDelete?: Promise<void> } = {}) {
   const user = userEvent.setup();
   const { fetchImpl } = fakeAuthFetch(opts);
+  const hold = opts.holdDelete;
+  // optionally keep the delete request in flight until the test lets it through
+  const served = hold
+    ? (vi.fn(async (u: RequestInfo | URL, i?: RequestInit) => {
+        if (String(u).endsWith('/api/account/delete')) await hold;
+        return fetchImpl(u, i);
+      }) as unknown as typeof fetch)
+    : fetchImpl;
   render(
-    <Harness fetchImpl={fetchImpl}>
+    <Harness fetchImpl={served}>
       <MemoryRouter initialEntries={['/vault/delete']}>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/vault" element={<p>Vault home</p>} />
+          <Route path="/vault" element={<VaultHome />} />
+          <Route path="/signin" element={<p>Welcome back</p>} />
           <Route path="/vault/delete" element={<Gate />} />
         </Routes>
       </MemoryRouter>
@@ -31,12 +40,17 @@ async function setup(opts: { deleteFails?: boolean } = {}) {
   await act(async () => {
     await current!.register({ username: 'wren-12', passphrase: PASS, role: 'survivor', ageConfirmed18: true });
   });
-  return { user, fetchImpl: fetchImpl as unknown as { mock: { calls: [RequestInfo | URL, RequestInit | undefined][] } } };
+  return { user, fetchImpl: served as unknown as { mock: { calls: [RequestInfo | URL, RequestInit | undefined][] } } };
 }
 
 /** Like RequireSession: the screen only renders while signed in. */
 function Gate() {
   return useSession().session ? <DeleteAccount /> : <p>Signed out</p>;
+}
+
+/** Like the real vault home behind RequireSession: signed out, it sends her to sign in. */
+function VaultHome() {
+  return useSession().session ? <p>Vault home</p> : <Navigate to="/signin" replace />;
 }
 
 const deleteCalls = (f: { mock: { calls: [RequestInfo | URL, RequestInit | undefined][] } }) =>
@@ -101,5 +115,21 @@ describe('Delete everything', () => {
     expect(await screen.findByRole('alert', {}, { timeout: 15_000 })).toHaveTextContent(/Nothing was deleted/);
     expect(screen.getByTestId('state')).toHaveTextContent('in:wren-12');
     expect(screen.getByRole('button', { name: 'Delete everything now' })).toBeEnabled();
+  }, 60_000);
+
+  it('if she leaves the screen while it is deleting, the session is still wiped and she lands on the public home', async () => {
+    let release!: () => void;
+    const { user, fetchImpl } = await setup({ holdDelete: new Promise<void>((r) => (release = r)) });
+    await user.type(screen.getByLabelText(/To confirm, type DELETE/), 'DELETE');
+    await user.type(screen.getByLabelText(/type your passphrase/), PASS);
+    await user.click(screen.getByRole('button', { name: 'Delete everything now' }));
+    await vi.waitFor(() => expect(deleteCalls(fetchImpl)).toHaveLength(1), { timeout: 15_000 });
+    await user.click(screen.getByRole('link', { name: 'Keep my space' }));
+    expect(screen.getByText('Vault home')).toBeInTheDocument();
+    await act(async () => release());
+
+    expect(await screen.findByText('Public home — deleted', {}, { timeout: 15_000 })).toBeInTheDocument();
+    expect(screen.getByTestId('state')).toHaveTextContent('out');
+    expect(current!.session).toBeNull();
   }, 60_000);
 });

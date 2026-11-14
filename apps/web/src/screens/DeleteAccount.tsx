@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { startTransition, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ProgressNote } from '../components/AuthForms';
 import { ErrorNote, PageTitle } from '../components/common';
@@ -31,10 +31,14 @@ export function DeleteAccount() {
   const [error, setError] = useState<string | null>(null);
   const ready = confirmMatches(typed) && pass.length > 0;
   const deleted = useRef(false);
+  const left = useRef(false);
   const lockRef = useRef(lock);
   lockRef.current = lock;
-  useEffect(
+  // A layout cleanup runs while this screen is removed, so the wipe renders before the public home can be seen with
+  // her session still in memory (a passive cleanup ran later, after that screen was already up).
+  useLayoutEffect(
     () => () => {
+      left.current = true;
       if (deleted.current) lockRef.current();
     },
     [],
@@ -60,6 +64,9 @@ export function DeleteAccount() {
     // sign-in guard redirect to "Welcome back" instead of the public home.
     deleted.current = true;
     navigate('/', { replace: true, state: { deleted: true } });
+    // She left this screen while it was deleting, so no unmount is left to trigger the wipe. Wipe now, in the same
+    // transition as the navigation, so the sign-in guard never renders the empty session first.
+    if (left.current) startTransition(() => lock());
   }
 
   return (
