@@ -8,7 +8,7 @@ import {
 } from '@matra/crypto';
 import { checkAttorneyKey, generateRosterKey, publicKeyFingerprint, toBase64 } from '@matra/crypto';
 import type { AttorneysResponse } from '@matra/shared';
-import { createRecord, defaultProfile, makeApp, registerUser, uploadBlob } from './test-helpers.js';
+import { createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, uploadBlob } from './test-helpers.js';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
 import { setVerified } from './attorney-verification.js';
 
@@ -280,7 +280,7 @@ describe('unverifying an attorney pauses access to existing shares', () => {
 
 describe('attorney directory signed by the organization (W3)', () => {
   it('serves the signed directory with the attorney list; it names only verified attorneys, with their key fingerprints', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const jane = await registerUser(app, 'jane.dir');
     const atty = await registerUser(app, 'atty.dir', 'attorney', { profile: { ...defaultProfile, displayName: 'Dir Counsel' } });
     await registerUser(app, 'atty.pending', 'attorney', { verify: false });

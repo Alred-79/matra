@@ -927,6 +927,8 @@ export interface ApiError { error: string; code?: string }
  POST   /api/shares/:id/renew  { expiresInDays? } -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked)
  POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only)
 
+ Sealed matching (only with MATRA_MATCHING=on; with it off, every route from here to /api/report-releases answers
+ 404 { code: 'matching_disabled' }, and POST /api/auth/register with role 'counselor' does too):
  GET    /api/escrow                                   -> { entries: EscrowEntry[] } (own sealed-match entries; status always 'sealed')
 
  GET    /api/matching/config                          -> MatchingConfig   (survivor)
@@ -975,3 +977,4 @@ export interface ApiError { error: string; code?: string }
 
 export * from './request-log.js';
 export * from './inspector.js';
+export * from './matching-mode.js';

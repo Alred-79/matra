@@ -22,7 +22,7 @@ import {
 } from '@matra/crypto';
 import type { CounselorMatchGroup, ReportReleaseBundle, SurvivorReportRequest } from '@matra/shared';
 import { getDb } from './app.js';
-import { createRecord, makeApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
+import { createRecord, makeMatchingApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
 
 const groupsOf = async (app: express.Express, c: TestUser) => {
   const r = await request(app).get('/api/counselor/groups').set(c.auth);
@@ -47,7 +47,7 @@ const ledgerTypes = (app: express.Express) =>
  * one the matcher assigned; `spare` is the other.
  */
 async function matched(opts: { twoCounselors?: boolean } = {}) {
-  const { app, db } = makeApp();
+  const { app, db } = makeMatchingApp();
   const c1 = await registerUser(app, 'loc.one', 'counselor');
   const c2 = opts.twoCounselors ? await registerUser(app, 'loc.two', 'counselor') : undefined;
   const a = await registerUser(app, 'survivor.a');
@@ -358,7 +358,7 @@ describe('revocation, withdrawal and deletion', () => {
 
 describe('ledger', () => {
   it('nothing is written at match time; every check, request, consent, decline and revoke has its own row', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');

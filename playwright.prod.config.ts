@@ -7,7 +7,8 @@ import base from './playwright.config';
  * NODE_ENV=production — strict CSP, same origin, DEMO banner on. Any CSP violation is a console error, which
  * fails the suite (see e2e/helpers.ts).
  *
- *   MATRA_DEMO_MODE=1 npm run build && npm run e2e:prod   (a production build must pin the matcher unless it is a demo)
+ *   MATRA_DEMO_MODE=1 MATRA_MATCHING=on npm run build && npm run e2e:prod   (a production build must say whether sealed
+ *   matching is in it, and must pin the matcher unless it is a demo; this suite walks the demo path, matching included)
  *   MATRA_E2E_DB=/some/scratch.db npm run e2e:prod
  */
 const PORT = Number(process.env.MATRA_E2E_PROD_PORT) || 4300;
@@ -25,7 +26,7 @@ const holders = [1, 2, 3];
 const ceremony = `npm run -s -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out "${KEYS}" --force --token-key > "${KEYS}/public.json"`;
 const pub = (expr: string) => `$(node -p "const p = require('${KEYS}/public.json'); ${expr}")`;
 const holderCmd = (i: number) =>
-  `NODE_ENV=production MATRA_HOLDER_INDEX=${i} MATRA_OPRF_SHARE_FILE="${KEYS}/oprf-share-${i}.key" MATRA_HOLDER_TOKEN_PUBKEY="${pub('p.holderTokenPublicKey')}" ` +
+  `NODE_ENV=production MATRA_MATCHING=on MATRA_HOLDER_INDEX=${i} MATRA_OPRF_SHARE_FILE="${KEYS}/oprf-share-${i}.key" MATRA_HOLDER_TOKEN_PUBKEY="${pub('p.holderTokenPublicKey')}" ` +
   `MATRA_HOLDER_DB_PATH="${path.dirname(DB)}/holder-${i}.db" PORT=${HOLDER_PORT + i} npm run -s -w @matra/server holder`;
 const waitFor = (i: number) => `until curl -sf http://127.0.0.1:${HOLDER_PORT + i}/health >/dev/null; do sleep 0.2; done`;
 // Phone verification (W13): production refuses the mock SMS provider unless MATRA_DEMO_MODE=1 (this stack is a
@@ -39,14 +40,14 @@ const rand = (f: string) => `node -e "process.stdout.write(require('crypto').ran
 const matcherKeys = ['matcher.key', 'matcher-token.key', 'attestation-platform.key'].map(rand).join(' && ');
 const matcherSecrets = `MATRA_MATCHER_KEY_FILE="${KEYS}/matcher.key" MATRA_MATCHER_TOKEN_FILE="${KEYS}/matcher-token.key" MATRA_ATTESTATION_PLATFORM_KEY_FILE="${KEYS}/attestation-platform.key"`;
 const matcherCmd =
-  `NODE_ENV=production MATRA_DEMO_MODE=1 ${matcherSecrets} MATRA_MATCHER_DB_PATH="${path.dirname(DB)}/matcher.db" ` +
+  `NODE_ENV=production MATRA_MATCHING=on MATRA_DEMO_MODE=1 ${matcherSecrets} MATRA_MATCHER_DB_PATH="${path.dirname(DB)}/matcher.db" ` +
   `MATRA_MATCH_RELEASE_DELAY_HOURS=0 PORT=${MATCHER_PORT} npm run -s -w @matra/matcher start`;
 const matcherPins =
   `MATRA_MATCHER_URL=http://127.0.0.1:${MATCHER_PORT} MATRA_MATCHER_TOKEN_FILE="${KEYS}/matcher-token.key" ` +
   `MATRA_ATTESTATION_PLATFORM_PUBKEY="$(MATRA_ATTESTATION_PLATFORM_KEY_FILE="${KEYS}/attestation-platform.key" npm run -s -w @matra/matcher measure -- --platform-pubkey)" ` +
   `MATRA_MATCHER_MEASUREMENT="$(npm run -s -w @matra/matcher measure)"`;
 const env =
-  `${matcherPins} NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY_FILE="${KEYS}/phone-hash.key" MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_MATCH_RELEASE_DELAY_HOURS=0 ` +
+  `${matcherPins} NODE_ENV=production MATRA_MATCHING=on MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY_FILE="${KEYS}/phone-hash.key" MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_MATCH_RELEASE_DELAY_HOURS=0 ` +
   `MATRA_OPRF_HOLDER_URLS=${holders.map((i) => `http://127.0.0.1:${HOLDER_PORT + i}`).join(',')} ` +
   `MATRA_OPRF_SHARE_PUBKEYS="${pub("p.holders.map((h) => h.publicKey).join(',')")}" MATRA_HOLDER_TOKEN_KEY_FILE="${KEYS}/holder-token.key"`;
 

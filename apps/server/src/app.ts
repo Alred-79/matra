@@ -13,6 +13,7 @@
  *       | counselor_key_mismatch | counselor_unavailable
  *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found | entry_not_found
  *       | counselor_not_found | group_not_found | request_not_found | release_not_found
+ *       | matching_disabled (MATRA_MATCHING=off: every matching / escrow / counselor / report route, and counselor sign-up)
  *   403 … | counselor_not_listed (seal to a counselor missing from the signed roster)
  *   400 phone_invalid | phone_not_supported | code_invalid | code_expired
  *   401 … invalid_credentials also for a wrong recovery code and an unknown, used or expired reset token
@@ -97,6 +98,7 @@ import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimi
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
 import { INSPECTOR_ROUTE, RequestRecorder, appProcess, fetchProcess, findInDb } from './inspector.js';
+import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, checkLeftoverMatchingRows, matchingDisabled } from './matching-off.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
@@ -120,9 +122,12 @@ export interface CreateAppOptions {
   /** Number of reverse-proxy hops to trust for the client IP (rate limiting). Render / Fly: 1. */
   trustProxy?: number;
   /**
-   * Sealed matching. `oprf` is the threshold OPRF key set (config.ts loadOprfThreshold): t, and either all m shares
-   * in-process or the remote holders' URLs + pinned share public keys + holder-token key. When omitted (tests), a fresh
-   * ephemeral 2-of-3 ceremony runs — matching then only works for the lifetime of this process.
+   * Sealed matching. Omitted or `false`: OFF (MATRA_MATCHING=off, the pilot default; src/matching-off.ts): no OPRF key
+   * is dealt, no matching_meta row is written, no matcher sync runs, every matching route answers 404
+   * `matching_disabled`, and counselor accounts can't be registered.
+   * An object turns it ON. `oprf` is the threshold OPRF key set (config.ts loadOprfThreshold): t, and either all m shares
+   * in-process or the remote holders' URLs + pinned share public keys + holder-token key. When `oprf` is omitted (tests),
+   * a fresh ephemeral 2-of-3 ceremony runs — matching then only works for the lifetime of this process.
    * releaseDelayHours (default 72): a group is released only once ≥ 2 distinct survivors' entries are at least this old.
    * allowKeyRotation: accept keys that differ from the ones recorded in the DB (MATRA_OPRF_ROTATE=1) → new key epoch.
    */
@@ -154,7 +159,7 @@ export interface CreateAppOptions {
      * config.ts loadMatcherConfig builds this from the environment.
      */
     matcher?: { client: MatcherClient; pins: MatcherPins };
-  };
+  } | false;
   /**
    * DEV / DEMO ONLY: the "what the server sees" inspector, GET /api/dev/inspector (src/inspector.ts). Unauthenticated;
    * keeps the last 200 request summaries in memory. index.ts sets it only when inspectorEnabled() (MATRA_INSPECTOR=1,
@@ -201,6 +206,18 @@ export class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * Stands in for a sealed-matching object (key holders, matcher) when matching is off: any use answers 404
+ * `matching_disabled`, the same as the route guard, so nothing can reach a key that was never dealt.
+ */
+function disabledMatching<T extends object>(): T {
+  return new Proxy({} as T, {
+    get() {
+      throw new HttpError(404, MATCHING_DISABLED.code, MATCHING_DISABLED.error);
+    },
+  });
 }
 
 function parse<T extends z.ZodType>(schema: T, data: unknown): z.output<T> {
@@ -485,6 +502,9 @@ const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action = 'auth.recovere
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
+  /** Sealed matching's settings when it is on; undefined when off (src/matching-off.ts). */
+  const mopts = opts.matching || undefined;
+  if (!mopts) checkLeftoverMatchingRows(db, process.env.NODE_ENV === 'production');
   const pepper = typeof opts.pepper === 'string' ? Buffer.from(opts.pepper, 'utf8') : opts.pepper;
   if (pepper.length < 16) throw new Error('pepper must be at least 16 bytes');
 
@@ -529,56 +549,73 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const survivorOnly = requireRole('survivor');
   const attorneyOnly = requireRole('attorney');
   const counselorOnly = requireRole('counselor');
+  // Matching off: one guard in front of every matching, escrow, counselor and report route, signed in or not.
+  if (!mopts) app.use(MATCHING_ROUTE_PREFIXES, matchingDisabled);
 
   // ── sealed matching: t-of-m threshold OPRF key holders (in-process, or remote processes behind this server) ──
-  const limits: OprfLimits = { ...DEFAULT_OPRF_LIMITS, ...opts.matching?.limits };
-  const oprfOpt = opts.matching?.oprf ?? { t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) };
-  let holders: HolderPool;
-  if (oprfOpt.remote) holders = new RemoteHolderPool(oprfOpt.t, oprfOpt.remote, pepper);
-  else if (oprfOpt.shares) holders = new InProcessHolderPool(oprfOpt.t, oprfOpt.shares, db, limits);
-  else throw new Error('matching.oprf needs either shares (in-process) or remote holders');
-  // Refuses an inconsistent or degenerate key set (shares from different ceremonies, duplicates, identity keys).
-  const groupPublicKey = toBase64(groupKeyFromShares(holders.publicKeys().map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })), holders.t));
-  const releaseDelayMs = Math.max(0, opts.matching?.releaseDelayHours ?? 72) * 3_600_000;
-  const matcher: MatcherClient =
-    opts.matching?.matcher?.client ??
-    new InProcessMatcher({ key: new Uint8Array(randomBytes(32)), platformSecretKey: new Uint8Array(randomBytes(32)), releaseDelayMs });
-  const matcherGate = new MatcherGate(matcher, opts.matching?.matcher?.pins ?? { allowSimulated: true });
-
-  // ── key pinning in the DB (review M5): t, the group key and the share public keys are recorded on first start; a
-  // silent key change would make every existing entry unmatchable (and could be used to partition survivors), so it is
-  // refused unless the operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on
-  // their next sign-in. A database still carrying the additive keys (oprf_pk_a/b) counts as a key change.
+  // Off (MATRA_MATCHING=off, src/matching-off.ts): none of this runs. No key is dealt and nothing is written to
+  // matching_meta; the matching routes below are registered but unreachable (the guard above answers 404 first), and
+  // anything that still reached these objects would get the same 404 (`disabledMatching`).
+  const limits: OprfLimits = { ...DEFAULT_OPRF_LIMITS, ...mopts?.limits };
   const metaGet = db.prepare('SELECT value FROM matching_meta WHERE key = ?');
   const metaSet = db.prepare('INSERT INTO matching_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
   const meta = (k: string) => (metaGet.get(k) as { value: string } | undefined)?.value;
-  const sharePks = JSON.stringify(holders.publicKeys());
-  db.transaction(() => {
-    const recorded = { t: meta('oprf_t'), pk: meta('oprf_group_pk'), shares: meta('oprf_share_pks') };
-    const legacy = meta('oprf_pk_a') !== undefined || meta('oprf_pk_b') !== undefined;
-    const record = () => {
-      metaSet.run('oprf_t', String(holders.t));
-      metaSet.run('oprf_group_pk', groupPublicKey);
-      metaSet.run('oprf_share_pks', sharePks);
-      db.prepare(`DELETE FROM matching_meta WHERE key IN ('oprf_pk_a', 'oprf_pk_b')`).run();
-    };
-    if (!legacy && recorded.t === undefined && recorded.pk === undefined && recorded.shares === undefined) {
-      record();
-      metaSet.run('key_epoch', String(Number(meta('key_epoch') ?? 0) + 1));
-    } else if (legacy || recorded.t !== String(holders.t) || recorded.pk !== groupPublicKey || recorded.shares !== sharePks) {
-      if (!opts.matching?.allowKeyRotation)
-        throw new Error(
-          'OPRF key holder public keys differ from the ones recorded in this database. Refusing to start: a silent key ' +
-            'change breaks every sealed entry. To rotate deliberately, restart once with MATRA_OPRF_ROTATE=1.',
-        );
-      const epoch = Number(meta('key_epoch') ?? 1) + 1;
-      record();
-      metaSet.run('key_epoch', String(epoch));
-      db.prepare('DELETE FROM oprf_quota').run(); // new keys: re-sealing must not be blocked by old quotas
-      console.warn(`[matra] OPRF keys rotated: key epoch is now ${epoch}. Survivors' clients re-seal on next sign-in.`);
-    }
-  })();
-  const keyEpoch = Number(meta('key_epoch'));
+  const startMatching = (on: NonNullable<typeof mopts>) => {
+    const oprfOpt = on.oprf ?? { t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) };
+    let holders: HolderPool;
+    if (oprfOpt.remote) holders = new RemoteHolderPool(oprfOpt.t, oprfOpt.remote, pepper);
+    else if (oprfOpt.shares) holders = new InProcessHolderPool(oprfOpt.t, oprfOpt.shares, db, limits);
+    else throw new Error('matching.oprf needs either shares (in-process) or remote holders');
+    // Refuses an inconsistent or degenerate key set (shares from different ceremonies, duplicates, identity keys).
+    const groupPublicKey = toBase64(groupKeyFromShares(holders.publicKeys().map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })), holders.t));
+    const releaseDelayMs = Math.max(0, on.releaseDelayHours ?? 72) * 3_600_000;
+    const matcher: MatcherClient =
+      on.matcher?.client ??
+      new InProcessMatcher({ key: new Uint8Array(randomBytes(32)), platformSecretKey: new Uint8Array(randomBytes(32)), releaseDelayMs });
+    const matcherGate = new MatcherGate(matcher, on.matcher?.pins ?? { allowSimulated: true });
+
+    // ── key pinning in the DB (review M5): t, the group key and the share public keys are recorded on first start; a
+    // silent key change would make every existing entry unmatchable (and could be used to partition survivors), so it is
+    // refused unless the operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on
+    // their next sign-in. A database still carrying the additive keys (oprf_pk_a/b) counts as a key change.
+    const sharePks = JSON.stringify(holders.publicKeys());
+    db.transaction(() => {
+      const recorded = { t: meta('oprf_t'), pk: meta('oprf_group_pk'), shares: meta('oprf_share_pks') };
+      const legacy = meta('oprf_pk_a') !== undefined || meta('oprf_pk_b') !== undefined;
+      const record = () => {
+        metaSet.run('oprf_t', String(holders.t));
+        metaSet.run('oprf_group_pk', groupPublicKey);
+        metaSet.run('oprf_share_pks', sharePks);
+        db.prepare(`DELETE FROM matching_meta WHERE key IN ('oprf_pk_a', 'oprf_pk_b')`).run();
+      };
+      if (!legacy && recorded.t === undefined && recorded.pk === undefined && recorded.shares === undefined) {
+        record();
+        metaSet.run('key_epoch', String(Number(meta('key_epoch') ?? 0) + 1));
+      } else if (legacy || recorded.t !== String(holders.t) || recorded.pk !== groupPublicKey || recorded.shares !== sharePks) {
+        if (!on.allowKeyRotation)
+          throw new Error(
+            'OPRF key holder public keys differ from the ones recorded in this database. Refusing to start: a silent key ' +
+              'change breaks every sealed entry. To rotate deliberately, restart once with MATRA_OPRF_ROTATE=1.',
+          );
+        const epoch = Number(meta('key_epoch') ?? 1) + 1;
+        record();
+        metaSet.run('key_epoch', String(epoch));
+        db.prepare('DELETE FROM oprf_quota').run(); // new keys: re-sealing must not be blocked by old quotas
+        console.warn(`[matra] OPRF keys rotated: key epoch is now ${epoch}. Survivors' clients re-seal on next sign-in.`);
+      }
+    })();
+    return { holders, groupPublicKey, releaseDelayMs, matcher, matcherGate, keyEpoch: Number(meta('key_epoch')) };
+  };
+  const { holders, groupPublicKey, releaseDelayMs, matcher, matcherGate, keyEpoch } = mopts
+    ? startMatching(mopts)
+    : {
+        holders: disabledMatching<HolderPool>(),
+        groupPublicKey: '',
+        releaseDelayMs: 0,
+        matcher: disabledMatching<MatcherClient>(),
+        matcherGate: disabledMatching<MatcherGate>(),
+        keyEpoch: 0,
+      };
   // One unit per account per distinct blinded element, whichever holders it goes to (src/oprf.ts AccountOprfBudget).
   const accountBudget = new AccountOprfBudget(new SqliteQuotaStore(db), limits);
 
@@ -674,6 +711,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   app.post('/api/auth/register', async (req, res) => {
     rateLimit(req, 'register', req.body?.username);
+    // Counselors exist only for sealed matching: with matching off there is nothing for a counselor account to do (and
+    // the same answer comes back whatever else the request holds).
+    if (!mopts && req.body?.role === 'counselor') throw new HttpError(404, MATCHING_DISABLED.code, MATCHING_DISABLED.error);
     const body = parse(S.registerRequest, req.body);
     assertKdfIterations(body.kdfIterations);
     if (q.userByName.get(body.username))
@@ -1306,8 +1346,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     ).run();
     db.prepare('DELETE FROM match_groups WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = match_groups.tag)').run();
   };
-  pruneSeals();
-  pruneGroups();
+  // Matching off: leave whatever an earlier "on" stored exactly as it is (src/matching-off.ts).
+  if (mopts) {
+    pruneSeals();
+    pruneGroups();
+  }
 
   // ── matcher service (src/matcher-client.ts; W15, W18). Every sealed entry is forwarded to the matcher with: its tag, a
   // pseudonymous survivor reference (HMAC of the tag and the account id under the pepper: the matcher counts distinct
@@ -1337,7 +1380,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   };
   let lastRosterSent = '';
   const syncOnce = async () => {
-    if (!(await matcherGate.ok())) return;
+    if (!mopts || !(await matcherGate.ok())) return; // nothing is ever sent to a matcher while matching is off
     const step = async (what: string, fn: () => Promise<void>) => {
       try {
         await fn();
@@ -1374,16 +1417,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
   /** Run one sync after any in flight (serialized; never throws). */
   const syncMatcher = (): Promise<void> => (syncChain = syncChain.then(syncOnce, syncOnce).catch(() => undefined));
   // The matcher may have lost state (an in-memory matcher, a restore): resend every entry once at startup (idempotent).
-  db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
-  setImmediate(() => void syncMatcher());
-  setInterval(() => void syncMatcher(), 60_000).unref();
+  if (mopts) {
+    db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
+    setImmediate(() => void syncMatcher());
+    setInterval(() => void syncMatcher(), 60_000).unref();
+  }
   app.locals.syncMatcher = syncMatcher;
   app.locals.matcherGateReset = () => matcherGate.reset();
 
   // ── phone verify-then-forget (W13, W19; src/sms.ts). Pending challenges live only in this Map, for 10 minutes: the
   // raw number is in memory just long enough for the provider's check call, and never written anywhere.
-  const requirePhone = opts.matching?.requirePhoneVerification ?? true;
-  const phoneOpt = opts.matching?.phone ?? {};
+  const requirePhone = mopts?.requirePhoneVerification ?? true;
+  const phoneOpt = mopts?.phone ?? {};
   const sms: SmsVerifier = phoneOpt.verifier ?? new MockSmsVerifier();
   const phoneHashKey = phoneOpt.hashKey ?? new Uint8Array(randomBytes(32));
   const maxAccountsPerPhone = phoneOpt.maxAccountsPerPhone ?? 2;
@@ -2364,7 +2409,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // ════════════ fallthrough & errors ════════════
   // ════════════ dev / demo: what the server sees (src/inspector.ts) ════════════
   if (recorder) {
-    const remoteHolders = oprfOpt.remote?.urls ?? [];
+    const remoteHolders = mopts?.oprf?.remote?.urls ?? [];
     app.get(INSPECTOR_ROUTE, async (req, res) => {
       const find = typeof req.query.find === 'string' ? req.query.find.trim().slice(0, 200) : '';
       const limiters: Array<[string, RateLimiter]> = [
@@ -2374,7 +2419,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ['sms global hour', smsGlobalHour],
         ['sms global day', smsGlobalDay],
       ];
-      const app_ = appProcess({ db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !oprfOpt.remote });
+      const app_ = appProcess({ db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !!mopts && !mopts.oprf?.remote });
       const holderStates = await Promise.all(
         remoteHolders.map((url, i) =>
           fetchProcess(`${url.replace(/\/+$/, '')}/debug/state`, { name: `Key holder ${i + 1}`, role: 'holder', note: `Separate process at ${url}.` }),
@@ -2382,9 +2427,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
       );
       let matcherState;
       try {
-        matcherState = matcher.debugState
-          ? await matcher.debugState()
-          : { name: 'Matcher', role: 'matcher' as const, note: 'This matcher client has no debug view.', tables: [] };
+        matcherState = !mopts
+          ? { name: 'Matcher', role: 'matcher' as const, note: 'Sealed matching is off (MATRA_MATCHING=off): there is no matcher.', tables: [] }
+          : matcher.debugState
+            ? await matcher.debugState()
+            : { name: 'Matcher', role: 'matcher' as const, note: 'This matcher client has no debug view.', tables: [] };
       } catch (e) {
         matcherState = { name: 'Matcher', role: 'matcher' as const, note: 'Separate matcher service.', error: `not reachable (${(e as Error).message})`, tables: [] };
       }

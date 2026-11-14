@@ -19,12 +19,22 @@ import { createApp, getDb, type CreateAppOptions } from './app.js';
 export const TEST_ITERATIONS = 1000;
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-export function makeApp(
-  extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; inspector?: boolean; minKdfIterations?: number } = {},
-) {
+type MakeAppOptions = { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; inspector?: boolean; minKdfIterations?: number };
+
+/**
+ * An app over an in-memory database. Sealed matching is OFF, as in the pilot (MATRA_MATCHING=off), unless the test
+ * turns it on with `matching: {…}` or uses makeMatchingApp.
+ */
+export function makeApp(extra: MakeAppOptions = {}) {
   // Tests release matched groups immediately unless they set a delay (production default: 72 h).
-  const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching: { releaseDelayHours: 0, ...extra.matching } });
+  const matching = extra.matching ? { releaseDelayHours: 0, ...extra.matching } : false;
+  const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching });
   return { app, db: getDb(app) };
+}
+
+/** makeApp with sealed matching ON (MATRA_MATCHING=on): an ephemeral 2-of-3 OPRF key set unless `matching.oprf` is given. */
+export function makeMatchingApp(extra: MakeAppOptions = {}) {
+  return makeApp({ ...extra, matching: extra.matching || {} });
 }
 
 export interface TestUser {

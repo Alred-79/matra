@@ -91,6 +91,11 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 | user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device. Failed sign-ins and wrong recovery codes are capped at 10 rows each per UTC day | account |
 
 ### Sealed matching
+
+With `MATRA_MATCHING=off` (the pilot setting) none of these tables gets a row: the server writes nothing for matching,
+loads no phone key, and refuses counselor accounts (docs/DEPLOY.md). The tables still exist (one schema for both
+settings), empty. A production server set to off refuses to start over a database that still has matching rows.
+
 | Table | What / why | Retention |
 |---|---|---|
 | match_entries | per (survivor, identifier): OPRF tag, contact bundle and contact details (ciphertext), her label (ciphertext), routing states sealed to the matcher (ciphertext), key epoch, sync flag | until she withdraws it or deletes her account |

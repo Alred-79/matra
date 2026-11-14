@@ -20,7 +20,7 @@ import type { Envelope, PublicUser } from '@matra/shared';
 import { AUDIT_LIST_LIMIT, getDb, LOGIN_FAILED_AUDIT_CAP, RECOVERY_FAILED_AUDIT_CAP } from './app.js';
 import { hashAuthKey } from './auth.js';
 import { sha256Hex } from './ledger.js';
-import { createRecord, makeApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
+import { createRecord, makeApp, makeMatchingApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
 
 // Count the timing-parity path without changing what it does; optionally run something during a hash (race tests).
 const dummy = vi.hoisted(() => ({ calls: 0, duringHash: null as null | (() => Promise<void>) }));
@@ -354,7 +354,7 @@ describe('recovery code', () => {
   });
 
   it('only survivor accounts can set up or use a recovery code', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     for (const role of ['attorney', 'counselor'] as const) {
       const u = await registerUser(app, `${role}.rc`, role);
       const { res, body } = await setUpRecovery(app, u);

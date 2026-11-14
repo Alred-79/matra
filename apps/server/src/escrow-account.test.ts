@@ -4,11 +4,11 @@ import path from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import request from 'supertest';
 import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
-import { createRecord, makeApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
+import { createRecord, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
 
 describe('account deletion', () => {
   it('deletes all user data but keeps the ledger intact', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const jane = await registerUser(app, 'jane.test');
     const keep = await registerUser(app, 'keeper.test');
     const atty = await registerUser(app, 'atty.nj', 'attorney');

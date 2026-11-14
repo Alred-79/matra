@@ -16,8 +16,9 @@ const DB = process.env.MATRA_E2E_DB || path.resolve('e2e/.data/e2e.db');
 
 export default defineConfig({
   testDir: './e2e',
-  // the demo-stack scenario runs against its own stack (playwright.demo.config.ts, npm run e2e:demo)
-  testIgnore: ['**/demo-stack.spec.ts'],
+  // the demo-stack scenario runs against its own stack (playwright.demo.config.ts, npm run e2e:demo), and the pilot
+  // (sealed matching off) against another (playwright.pilot.config.ts, npm run e2e:pilot)
+  testIgnore: ['**/demo-stack.spec.ts', '**/pilot.spec.ts'],
   // Key derivation (600k PBKDF2 iterations) takes seconds per sign-in.
   timeout: 240_000,
   expect: { timeout: 30_000 },
@@ -38,9 +39,10 @@ export default defineConfig({
       command: [
         `rm -f "${DB}" "${DB}-wal" "${DB}-shm"`,
         `mkdir -p "${path.dirname(DB)}"`,
-        `MATRA_DB_PATH="${DB}" npm run seed --silent`,
+        // This suite walks the full demo path, sealed matching included: MATRA_MATCHING=on (the pilot runs it off).
+        `MATRA_MATCHING=on MATRA_DB_PATH="${DB}" npm run seed --silent`,
         // No sealed-match release delay in tests (production default: 72 h), so test 5 sees its group immediately.
-        `MATRA_DB_PATH="${DB}" PORT=${API_PORT} MATRA_AUTO_VERIFY_ATTORNEYS=1 MATRA_MATCH_RELEASE_DELAY_HOURS=0 npx tsx apps/server/src/index.ts`,
+        `MATRA_MATCHING=on MATRA_DB_PATH="${DB}" PORT=${API_PORT} MATRA_AUTO_VERIFY_ATTORNEYS=1 MATRA_MATCH_RELEASE_DELAY_HOURS=0 npx tsx apps/server/src/index.ts`,
       ].join(' && '),
       url: `http://localhost:${API_PORT}/api/health`,
       timeout: 120_000,
@@ -49,7 +51,7 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: `MATRA_WEB_NO_HMR=1 MATRA_WEB_PORT=${WEB_PORT} MATRA_API_URL=http://localhost:${API_PORT} npm run dev -w @matra/web`,
+      command: `MATRA_MATCHING=on MATRA_WEB_NO_HMR=1 MATRA_WEB_PORT=${WEB_PORT} MATRA_API_URL=http://localhost:${API_PORT} npm run dev -w @matra/web`,
       url: `http://localhost:${WEB_PORT}`,
       timeout: 120_000,
       reuseExistingServer: false,

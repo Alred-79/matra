@@ -52,6 +52,7 @@ import {
 } from '@matra/crypto';
 import type { AttorneyProfile, AuthResponse, EvidenceItem, EvidenceKind, IntakeRecord, MatchContactPreferences, MatchStates, RegisterRequest } from '@matra/shared';
 import { createApp, flushPhoneTokens, getDb } from './app.js';
+import { loadMatchingMode } from './matching-off.js';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
 import {
   loadDemoMode,
@@ -231,6 +232,8 @@ async function main() {
   if (!dbPath.split(path.sep).includes('.demo')) throw new Error(`demo-seed refuses a database outside a .demo directory: ${dbPath}`);
   const signingKeyFile = process.env.MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE;
   if (!signingKeyFile) throw new Error('MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE (the demo organization key) must be given to demo-seed.');
+  // The demo shows sealed matching end to end (counselors, sealed entries, a staged release): it needs it on.
+  if (loadMatchingMode() !== 'on') throw new Error('demo-seed seeds sealed matching: run it with MATRA_MATCHING=on (the demo stack sets it).');
 
   // The same configuration as index.ts (remote holders, the separate matcher, the mock SMS provider in demo mode).
   const matchingSettings = loadMatchingSettings();
