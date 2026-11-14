@@ -103,7 +103,8 @@ export function Welcome() {
             </span>
             <h3>You decide</h3>
             <p>
-              Make a summary for police or an advocate, or share with a verified volunteer or legal-aid attorney — only if you say yes.
+              Make your own summary and decide whether to share it, and with whom. A verified volunteer or legal-aid attorney
+              sees your file only if you say yes.
             </p>
           </div>
         </div>
