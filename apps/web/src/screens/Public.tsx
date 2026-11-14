@@ -181,7 +181,10 @@ export function SafetyTips() {
           Press <strong>Quick exit</strong> at the top right, or press <kbd>Esc</kbd> three times. Your space locks, this page
           is replaced with a weather search, and the back button won’t bring it back.
         </p>
-        <p>Your space also locks itself after 15 minutes without activity.</p>
+        <p>
+          Your space also locks itself after 15 minutes without activity, and this page is replaced with the same weather
+          search. To come back, open this site again and sign in.
+        </p>
       </section>
       <CrisisResources />
       <p>
