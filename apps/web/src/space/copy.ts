@@ -133,12 +133,14 @@ export const COPY = {
     notSure: "I'm not sure",
     pickDate: 'Pick a date',
     describe: 'Describe it in words',
-    escrowMore: 'What is a sealed match?',
+    escrowMore: __MATRA_MATCHING__ ? 'What is a sealed match?' : '',
     filesAdded: (n: number) => `${n === 1 ? '1 file added' : `${n} files added`}. ${NOTICES.keepOriginals.body[0]}`,
     moreDetails: 'More details, only if you know them',
     online: 'Ways to recognize them online',
-    onlineWhy:
-      'If you add one of these, you can choose a sealed match next. It is sealed on this device before it is sent. Only if someone else names the same person would a Legal Options Counselor (a licensed attorney) see it and reach out to you, privately.',
+    // shown only in a build with sealed matching (space/fields.tsx); empty in any other, so its words aren't shipped
+    onlineWhy: __MATRA_MATCHING__
+      ? 'If you add one of these, you can choose a sealed match next. It is sealed on this device before it is sent. Only if someone else names the same person would a Legal Options Counselor (a licensed attorney) see it and reach out to you, privately.'
+      : '',
     noPeople: 'This is for the people you named in “The person”. Add someone there first, if you want to.',
   },
 

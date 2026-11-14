@@ -5,6 +5,12 @@ import type { IntakeRecord } from '@matra/shared';
 import { emptyDraft, type IntakeDraft } from '../intake/draft';
 import type { StoryEntry, Suggestion } from '../understand/types';
 
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
+
 // A tiny stand-in engine: finds "March 14" and "his apartment" in her words.
 const understandSpy = vi.fn((entries: StoryEntry[], opts?: { dismissed?: string[] }): Suggestion[] => {
   const out: Suggestion[] = [];

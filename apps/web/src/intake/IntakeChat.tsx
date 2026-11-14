@@ -514,8 +514,8 @@ function StepInput({
       return <FormInput step={step} {...common} />;
     case 'group':
       return <GroupInput step={step} {...common} />;
-    case 'escrow':
-      return <EscrowInput step={step} draft={draft} {...common} />;
+    case 'escrow': // only a build with sealed matching has this step (intake/script.ts)
+      return __MATRA_MATCHING__ ? <EscrowInput step={step} draft={draft} {...common} /> : null;
     default:
       return null;
   }

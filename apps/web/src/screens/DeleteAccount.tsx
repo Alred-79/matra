@@ -89,7 +89,9 @@ export function DeleteAccount() {
         <ul className="bullets">
           <li>Every version of your story, your drafts, and your evidence files.</li>
           <li>The locked copies on our server, and the locked keys stored with them.</li>
-          <li>Your sealed matches, any sharing with attorneys, your activity list, and your sign-in.</li>
+          <li>
+            {__MATRA_MATCHING__ ? 'Your sealed matches, any' : 'Any'} sharing with attorneys, your activity list, and your sign-in.
+          </li>
         </ul>
         <p style={{ margin: 0 }}>
           <strong>This can’t be undone.</strong> We can’t bring any of it back, even if you ask us to.

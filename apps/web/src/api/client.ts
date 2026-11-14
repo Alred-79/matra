@@ -7,40 +7,22 @@
  */
 import { sha256Hex, toBase64 } from '@matra/crypto';
 import type {
-  AttestationDocument,
-  AddMatchSealsRequest,
   AttorneyProfile,
   AttorneysResponse,
   AuditEvent,
   AuthResponse,
   BlobMeta,
   CreateBlobResponse,
-  CounselorMatchGroup,
-  CounselorNote,
   CounselorProfile,
-  CounselorReportRequest,
-  ConflictCheckRequest,
-  CreateMatchEntryRequest,
   CreateRecordRequest,
   CreateRecordResponse,
   CreateShareRequest,
-  EscrowEntry,
   Envelope,
   LedgerEntry,
   LedgerProofRequest,
   LedgerProofResponse,
   LedgerVerifyResponse,
-  ReportConsentRequest,
-  ReportRelease,
-  ReportReleaseBundle,
-  SurvivorReportRelease,
-  SurvivorReportRequest,
   LoginRequest,
-  MatchingConfig,
-  OprfEvaluateRequest,
-  OprfEvaluateResponse,
-  PhoneVerificationStartResponse,
-  PhoneVerificationStatus,
   PreloginResponse,
   PublicUser,
   RecoverFinishRequest,
@@ -101,7 +83,8 @@ export class ApiClient {
     return h;
   }
 
-  private async raw(method: string, path: string, init: { body?: BodyInit; headers?: Record<string, string> } = {}) {
+  /** @internal shared with MatchingApiClient (api/matching.ts) */
+  protected async raw(method: string, path: string, init: { body?: BodyInit; headers?: Record<string, string> } = {}) {
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -129,7 +112,8 @@ export class ApiClient {
     return res;
   }
 
-  private async json<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** @internal shared with MatchingApiClient (api/matching.ts) */
+  protected async json<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await this.raw(method, path, {
       body: body === undefined ? undefined : JSON.stringify(body),
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -233,97 +217,6 @@ export class ApiClient {
   }
   revokeShare(id: string) {
     return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', `/api/shares/${encodeURIComponent(id)}/revoke`);
-  }
-
-  // ── escrow ──
-  listEscrow() {
-    return this.json<{ entries: EscrowEntry[] }>('GET', '/api/escrow');
-  }
-
-  // ── sealed matching (survivor) ──
-  /** Phone verify-then-forget before sealed matching (counselor/PhoneVerify.tsx). */
-  phoneVerificationStatus() {
-    return this.json<PhoneVerificationStatus>('GET', '/api/matching/verification');
-  }
-  startPhoneVerification(phone: string) {
-    return this.json<PhoneVerificationStartResponse>('POST', '/api/matching/verification/start', { phone });
-  }
-  checkPhoneVerification(challengeId: string, code: string) {
-    return this.json<{ verified: true }>('POST', '/api/matching/verification/check', { challengeId, code });
-  }
-  matchingConfig() {
-    return this.json<MatchingConfig>('GET', '/api/matching/config');
-  }
-  /** The matcher's attestation document for this nonce (proxied by the app server; verified by the caller). */
-  matcherAttestation(nonce: string) {
-    return this.json<AttestationDocument>('GET', `/api/matching/attestation?nonce=${encodeURIComponent(nonce)}`);
-  }
-  /** OPRF key holder `index` (1..m) of the threshold OPRF; the app server relays to it. */
-  oprfEvaluate(index: number, req: OprfEvaluateRequest) {
-    return this.json<OprfEvaluateResponse>('POST', `/api/matching/oprf/${index}`, req);
-  }
-  createMatchEntry(req: CreateMatchEntryRequest) {
-    return this.json<{ entry: EscrowEntry }>('POST', '/api/matching/entries', req);
-  }
-  /** Add seals for counselors who joined the roster after she sealed (owner only). */
-  addMatchSeals(id: string, req: AddMatchSealsRequest) {
-    return this.json<{ entry: EscrowEntry }>('POST', `/api/matching/entries/${encodeURIComponent(id)}/seals`, req);
-  }
-  listMatchEntries() {
-    return this.json<{ entries: EscrowEntry[] }>('GET', '/api/matching/entries');
-  }
-  withdrawMatchEntry(id: string) {
-    return this.json<{ ok: true }>('DELETE', `/api/matching/entries/${encodeURIComponent(id)}`);
-  }
-
-  // ── Legal Options Counselor ──
-  counselorGroups() {
-    return this.json<{ groups: CounselorMatchGroup[] }>('GET', '/api/counselor/groups');
-  }
-  addCounselorNote(groupId: string, req: { entryId?: string; envelope: Envelope }) {
-    return this.json<{ note: CounselorNote }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/notes`, req);
-  }
-  /** decline an assigned group (conflict of interest): the matcher passes it to another counselor */
-  declineCounselorGroup(groupId: string) {
-    return this.json<{ ok: true }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/decline`);
-  }
-  /** Staged release: her conflict check for a group ('clear' releases contact details to her; 'conflict' passes it on). */
-  counselorConflictCheck(groupId: string, req: ConflictCheckRequest) {
-    return this.json<{ ok: true; result: ConflictCheckRequest['result'] }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/conflict-check`, req);
-  }
-  /** Stage 2: ask one survivor (whom she has already spoken with) for her full report. */
-  requestSurvivorReport(groupId: string, entryId: string) {
-    return this.json<{ request: CounselorReportRequest }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/report-requests`, {
-      entryId,
-      expected: true,
-    });
-  }
-  cancelReportRequest(id: string) {
-    return this.json<{ request: CounselorReportRequest }>('POST', `/api/counselor/report-requests/${encodeURIComponent(id)}/cancel`);
-  }
-  counselorReleases() {
-    return this.json<{ releases: ReportRelease[] }>('GET', '/api/counselor/releases');
-  }
-  counselorReleaseBundle(id: string) {
-    return this.json<ReportReleaseBundle>('GET', `/api/counselor/releases/${encodeURIComponent(id)}/bundle`);
-  }
-  async counselorReleaseBlob(id: string, blobId: string): Promise<Uint8Array> {
-    const res = await this.raw('GET', `/api/counselor/releases/${encodeURIComponent(id)}/blobs/${encodeURIComponent(blobId)}`);
-    return new Uint8Array(await res.arrayBuffer());
-  }
-
-  // ── report requests (survivor side of staged release) ──
-  reportRequests() {
-    return this.json<{ requests: SurvivorReportRequest[] }>('GET', '/api/report-requests');
-  }
-  consentReportRequest(id: string, req: ReportConsentRequest) {
-    return this.json<{ release: SurvivorReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-requests/${encodeURIComponent(id)}/consent`, req);
-  }
-  declineReportRequest(id: string) {
-    return this.json<{ request: SurvivorReportRequest }>('POST', `/api/report-requests/${encodeURIComponent(id)}/decline`);
-  }
-  revokeReportRelease(id: string) {
-    return this.json<{ release: SurvivorReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-releases/${encodeURIComponent(id)}/revoke`);
   }
 
   // ── audit / account ──

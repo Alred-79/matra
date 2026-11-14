@@ -914,44 +914,50 @@ export const STEPS: ScriptStep[] = [
       { key: 'whereabouts', label: 'Where they might be now', type: 'text' },
     ],
   },
-  {
-    id: 'person.escrow',
-    phase: 'person',
-    kind: 'escrow',
-    showIf: anyPersonHasIdentifier,
-    // Everything after the first line is the consent she agrees to, word for word (lib/disclosures.ts, Memo §7A).
-    say: ['There is one more thing you can choose, if you want. It is called a sealed match.', ...MATCHING_CONSENT_LINES],
-    label: 'Sealed match',
-  },
+  // Sealed matching: only in a build with it (MATRA_MATCHING=on). A pilot build never asks these two questions, and
+  // their words are not in its bundle.
+  ...(__MATRA_MATCHING__
+    ? ([
+        {
+          id: 'person.escrow',
+          phase: 'person',
+          kind: 'escrow',
+          showIf: anyPersonHasIdentifier,
+          // Everything after the first line is the consent she agrees to, word for word (lib/disclosures.ts, Memo §7A).
+          say: ['There is one more thing you can choose, if you want. It is called a sealed match.', ...MATCHING_CONSENT_LINES],
+          label: 'Sealed match',
+        },
 
-  {
-    id: 'person.matchContact',
-    phase: 'person',
-    kind: 'form',
-    showIf: (d) => {
-      const a = answerOf(d, 'person.escrow');
-      return !!a && typeof a === 'object' && !Array.isArray(a) && Object.values(a as Record<string, string>).includes('yes');
-    },
-    say: [
-      'If there is ever a match, how would you like the legal options counselor to reach you?',
-      'Only they would use this, only if there is a match, and only privately.',
-    ],
-    label: 'How a counselor can reach you about a match',
-    fields: [
-      {
-        key: 'method',
-        label: 'Best way to reach you',
-        type: 'choice',
-        options: [
-          { value: 'phone', label: 'Phone call' },
-          { value: 'text', label: 'Text message' },
-          { value: 'email', label: 'Email' },
-        ],
-      },
-      { key: 'detail', label: 'Phone number or email to use', type: 'text' },
-      { key: 'notes', label: 'Anything they should know', type: 'text', hint: "For example: 'only after 6pm' or 'don't leave a message'." },
-    ],
-  },
+        {
+          id: 'person.matchContact',
+          phase: 'person',
+          kind: 'form',
+          showIf: (d) => {
+            const a = answerOf(d, 'person.escrow');
+            return !!a && typeof a === 'object' && !Array.isArray(a) && Object.values(a as Record<string, string>).includes('yes');
+          },
+          say: [
+            'If there is ever a match, how would you like the legal options counselor to reach you?',
+            'Only they would use this, only if there is a match, and only privately.',
+          ],
+          label: 'How a counselor can reach you about a match',
+          fields: [
+            {
+              key: 'method',
+              label: 'Best way to reach you',
+              type: 'choice',
+              options: [
+                { value: 'phone', label: 'Phone call' },
+                { value: 'text', label: 'Text message' },
+                { value: 'email', label: 'Email' },
+              ],
+            },
+            { key: 'detail', label: 'Phone number or email to use', type: 'text' },
+            { key: 'notes', label: 'Anything they should know', type: 'text', hint: "For example: 'only after 6pm' or 'don't leave a message'." },
+          ],
+        },
+      ] satisfies ScriptStep[])
+    : []),
 
   // ── (g) Witnesses & people she told ──
   {
@@ -1415,11 +1421,13 @@ export const SPACE_PROMPTS: Record<string, { q: string; hint?: string }> = {
   },
 
   'person.list': { q: 'What can you tell us about them?', hint: 'Fill in only what you know.' },
-  'person.escrow': { q: 'Would you like a sealed match?' },
-  'person.matchContact': {
-    q: 'If there is ever a match, how would you like a counselor to reach you?',
-    hint: 'Only a Legal Options Counselor (a licensed attorney) would use this — privately, and only if there is a match.',
-  },
+  ...(__MATRA_MATCHING__ && {
+    'person.escrow': { q: 'Would you like a sealed match?' },
+    'person.matchContact': {
+      q: 'If there is ever a match, how would you like a counselor to reach you?',
+      hint: 'Only a Legal Options Counselor (a licensed attorney) would use this — privately, and only if there is a match.',
+    },
+  }),
 
   'people.told': {
     q: 'Have you told anyone? You can add them here.',

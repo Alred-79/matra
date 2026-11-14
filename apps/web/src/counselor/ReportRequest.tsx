@@ -17,9 +17,11 @@ import type { ReportRevokeReason, SurvivorReportRequest, WrappedKey } from '@mat
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
 import { UnreadableNote } from '../components/UnreadableNote';
 import { REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
-import { friendlyError, useRequiredSession } from '../lib/session';
-import { blobKeyFor, escrowLabel, finals, loadVault } from '../lib/vault';
+import { friendlyError } from '../lib/session';
+import { blobKeyFor, finals, loadVault } from '../lib/vault';
 import { MATCH_PINS } from '../matchPins';
+import { escrowLabel, useMatchingSession } from '../lib/matching';
+import type { MatchingApiClient } from '../api/matching';
 
 const DAYS = 90;
 
@@ -31,7 +33,7 @@ const ENDED_NOTE: Record<Exclude<ReportRevokeReason, 'survivor'>, string> = {
 };
 
 /** Is this counselor (this exact key) on the organization-signed roster? `null` when the build pins no roster key. */
-async function rosterVouches(api: ReturnType<typeof useRequiredSession>['api'], req: SurvivorReportRequest): Promise<boolean | null> {
+async function rosterVouches(api: MatchingApiClient, req: SurvivorReportRequest): Promise<boolean | null> {
   if (!MATCH_PINS.rosterKey) return null;
   const config = await api.matchingConfig();
   const roster = verifyCounselorRoster(config.roster, fromBase64(MATCH_PINS.rosterKey));
@@ -42,7 +44,7 @@ async function rosterVouches(api: ReturnType<typeof useRequiredSession>['api'], 
 
 export function ReportRequest() {
   const { id = '' } = useParams();
-  const { api, session } = useRequiredSession();
+  const { api, session } = useMatchingSession();
   const data = useAsync(async () => {
     const [{ requests }, records, { entries }] = await Promise.all([api.reportRequests(), loadVault(api, session.masterKey), api.listEscrow()]);
     const req = requests.find((r) => r.id === id);

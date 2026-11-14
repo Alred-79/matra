@@ -89,4 +89,4 @@
 **Materials to share or adapt:**
 - Pitch deck (14 slides, with live app screenshots): https://claude.ai/artifact/B7FPP3QVS7ewswx2Aoa5PB (private until shared from its Share menu; exports to PowerPoint/PDF).
 - In this repo: `docs/PITCH_ONE_PAGER.md`, `docs/LEGAL_RESEARCH_MEMO.md`, `docs/SECURITY_WHITEPAPER.md`, `docs/DEMO_SCRIPT.md`, `docs/ATTORNEY_PARTNER_MOU_TEMPLATE.md`, and this folder (targets, email templates, meeting playbook, lawyer FAQ, grant boilerplate, pilot proposal).
-- Live demo: `npm install && npm run seed && npm run dev`, then http://localhost:5173 (survivor `jane.demo` / `demo-survivor-passphrase`; attorney `attorney.nj1` / `demo-attorney-passphrase`; counselor `counselor.demo` / `demo-counselor-passphrase` once the matching rebuild lands).
+- Live demo: `npm install && MATRA_MATCHING=on npm run seed && MATRA_MATCHING=on npm run dev` (or `npm run demo` for the whole stack), then http://localhost:5173 (survivor `jane.demo` / `demo-survivor-passphrase`; attorney `attorney.nj1` / `demo-attorney-passphrase`; counselor `counselor.demo` / `demo-counselor-passphrase` once the matching rebuild lands).

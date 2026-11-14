@@ -114,7 +114,7 @@ export const NOTICES = {
 /**
  * Sealed-match consent (Memo §7A). She sees these lines, in this order, wherever she can opt in (the story space and
  * the one-question-at-a-time interview), and on the "What you've sealed" page. The exact same words, joined, are
- * stored in her encrypted contact bundle (lib/vault.ts MATCHING_CONSENT_STATEMENT), so the counselor sees exactly
+ * stored in her encrypted contact bundle (lib/matching.ts MATCHING_CONSENT_STATEMENT), so the counselor sees exactly
  * what she was told.
  *
  * Accuracy (threat model W2/W14): say the identifier is sealed and that only a counselor sees a match. Never claim

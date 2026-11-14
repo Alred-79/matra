@@ -5,7 +5,9 @@
  */
 import type { ApiClient } from '../api/client';
 import { createZip, safeFileName, type ZipEntry } from './zip';
-import { blobKeyFor, escrowLabel, loadVault, mergeEvidence, openEvidence } from './vault';
+import { blobKeyFor, loadVault, mergeEvidence, openEvidence } from './vault';
+import { matchingApi } from '../api/matching';
+import { escrowLabel } from './matching';
 
 export interface DataExport {
   zip: Uint8Array;
@@ -17,6 +19,11 @@ export interface DataExport {
   /** Evidence files that could not be decrypted or failed their hash check (listed in the manifest too). */
   problems: string[];
 }
+
+/** Only in a build with sealed matching (MATRA_MATCHING=on). */
+const ESCROW_README = `escrow.json             The labels of identifiers you sealed in escrow (the sealed codes
+                        themselves cannot be reversed and are not included).
+`;
 
 const README = (alias: string, at: string) => `Matra — your data export
 =======================
@@ -39,9 +46,7 @@ evidence/manifest.json  One entry per evidence file: original name, type, size, 
                         recorded when you added it, and whether this copy still matches it.
 evidence/...            The evidence files themselves (as stored — with hidden details removed
                         where Matra could do that).
-escrow.json             The labels of identifiers you sealed in escrow (the sealed codes
-                        themselves cannot be reversed and are not included).
-shares.json             Who you shared your file with, the exact consent text, and status.
+${__MATRA_MATCHING__ ? ESCROW_README : ''}shares.json             Who you shared your file with, the exact consent text, and status.
 activity.json           Your activity log (sign-ins, saves, shares, attorney access).
 
 To check a file has not changed, compute its SHA-256 and compare it with the manifest:
@@ -54,7 +59,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
   const [vault, { blobs }, escrow, shares, audit] = await Promise.all([
     loadVault(api, masterKey, { includeProfile: true }),
     api.listBlobs(),
-    api.listEscrow().catch(() => ({ entries: [] })),
+    __MATRA_MATCHING__ ? matchingApi(api).listEscrow().catch(() => ({ entries: [] })) : { entries: [] },
     api.listShares().catch(() => ({ shares: [] })),
     api.listAudit().catch(() => ({ events: [] })),
   ]);
@@ -105,9 +110,11 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     }
   }
 
-  const escrowLabels = await Promise.all(
-    escrow.entries.map(async (e) => ({ label: await escrowLabel(e.labelEnvelope, masterKey), sealedAt: e.createdAt, ledgerEntryId: e.ledgerEntryId })),
-  );
+  const escrowLabels = __MATRA_MATCHING__
+    ? await Promise.all(
+        escrow.entries.map(async (e) => ({ label: await escrowLabel(e.labelEnvelope, masterKey), sealedAt: e.createdAt, ledgerEntryId: e.ledgerEntryId })),
+      )
+    : [];
 
   // Saved versions that couldn't be opened are not in records.json: say so in the manifest's problems list too, so this
   // copy is never taken as complete.
@@ -120,7 +127,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     { name: 'records.json', data: json({ exportedAt: at, alias, records, unreadableRecords: vault.unreadable }), date: now },
     { name: 'evidence/manifest.json', data: json({ exportedAt: at, files: manifest, problems: [...unreadableProblem, ...problems] }), date: now },
     ...entries,
-    { name: 'escrow.json', data: json({ exportedAt: at, sealed: escrowLabels }), date: now },
+    ...(__MATRA_MATCHING__ ? [{ name: 'escrow.json', data: json({ exportedAt: at, sealed: escrowLabels }), date: now }] : []),
     { name: 'shares.json', data: json({ exportedAt: at, shares: shares.shares }), date: now },
     { name: 'activity.json', data: json({ exportedAt: at, events: audit.events }), date: now },
   ];

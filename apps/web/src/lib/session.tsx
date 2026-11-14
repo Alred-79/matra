@@ -29,7 +29,8 @@ import {
 import type { AttorneyProfile, AuthResponse, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
-import { UnreadableVaultError, getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
+import { MatchingApiClient } from '../api/matching';
+import { UnreadableVaultError, getProfile as loadProfileRecord, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 import { mirror } from '../dev/mirror';
 
@@ -179,7 +180,15 @@ export function SessionProvider({
   const [profile, setProfile] = useState<VaultProfile | null>(null);
   const profileRecordRef = useRef<string | undefined>(undefined);
 
-  const api = useMemo(() => new ApiClient({ getToken: () => tokenRef.current, fetchImpl }), [fetchImpl]);
+  // A build with sealed matching (MATRA_MATCHING=on) gets the client that can reach the matching routes; any other
+  // build has no code for them at all (api/matching.ts is left out of its bundle).
+  const api = useMemo(
+    () =>
+      __MATRA_MATCHING__
+        ? new MatchingApiClient({ getToken: () => tokenRef.current, fetchImpl })
+        : new ApiClient({ getToken: () => tokenRef.current, fetchImpl }),
+    [fetchImpl],
+  );
 
   const clear = useCallback(() => {
     tokenRef.current = null;
@@ -304,7 +313,11 @@ export function SessionProvider({
         }
         // Keep her sealed-match entries current (re-seal after a key rotation, seal to new counselors). In the
         // background and silent: it never reveals anything about matches, and a failure just retries next sign-in.
-        void refreshSealedMatches(new ApiClient({ getToken: () => res.token, fetchImpl }), masterKey).catch(() => undefined);
+        // Only in a build with sealed matching: otherwise this code (and lib/matching.ts) is not in the bundle.
+        if (__MATRA_MATCHING__)
+          void import('./matching')
+            .then((m) => m.refreshSealedMatches(new MatchingApiClient({ getToken: () => res.token, fetchImpl }), masterKey))
+            .catch(() => undefined);
       }
       return s;
     },

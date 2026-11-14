@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { STEPS } from '../intake/script';
 import { MATCHING_EXPLANATION } from '../counselor/SurvivorMatching';
 import { CONFLICT_CHECK_STATEMENT_VERSION } from '@matra/shared';
 import { CONFLICT_CHECK_STATEMENT, MATCHING_CONSENT_LINES, REPORT_REQUEST_LINES, buildReportConsentStatement } from './disclosures';
-import { MATCHING_CONSENT_STATEMENT } from './vault';
+import { MATCHING_CONSENT_STATEMENT } from './matching';
+
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
 
 describe('sealed-match consent (Memo §7A)', () => {
   const shown = STEPS.find((s) => s.id === 'person.escrow')!.say;

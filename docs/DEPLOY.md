@@ -11,13 +11,34 @@ One Node process (`npm start`, or the Docker image) serves both:
 - the API under `/api`, which only ever handles ciphertext, wrapped keys and hashes, and
 - the built web app (`apps/web/dist`) from the same origin, with an SPA fallback to `index.html`.
 
+### Sealed matching: off or on (`MATRA_MATCHING`)
+
+One switch, `MATRA_MATCHING=off|on`, read by the app server, the key holders, the matcher and the web build. **Off is
+the pilot setting.** Production requires it to be set, at build time and at run time: an unset value is refused.
+
+- **Off:** the web build leaves out the sealed-match and match-contact questions, the phone step, the matching and
+  counselor screens and their API calls (`npm run build` audits the bundle for their route strings). The server loads
+  no OPRF, phone or matcher configuration, deals no key, answers 404 `matching_disabled` on every `/api/matching`,
+  `/api/escrow`, `/api/counselor`, `/api/report-requests` and `/api/report-releases` route, and refuses counselor
+  sign-ups. It **refuses to start** if any matching-only variable is set (`MATRA_OPRF_SHARE*`, `MATRA_OPRF_HOLDER_URLS`,
+  `MATRA_HOLDER_TOKEN_KEY*`, `MATRA_MATCHER_URL`, `MATRA_MATCHER_KEY*`, `MATRA_MATCHER_TOKEN*`,
+  `MATRA_ATTESTATION_PLATFORM_KEY*`, `MATRA_PHONE_HASH_KEY*`), and a production server refuses to start over a database
+  that still holds sealed-match entries or report releases (development only warns; nothing is deleted). A web build
+  that is off refuses the OPRF and matcher pins; it still needs `MATRA_COUNSELOR_ROSTER_PUBKEY`, which signs the attorney
+  directory. The key holders and the matcher refuse to run with `MATRA_MATCHING=off`.
+- **On:** everything below about sealed matching applies. The demo stack (`npm run demo`, `compose.yaml`, the Render
+  Blueprint) runs on.
+
+Outside production the default is off.
+
 When `NODE_ENV=production`:
 
 - The web app is served with a strict Content-Security-Policy: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. There are no inline scripts, no `eval`, and no third-party origins. `'wasm-unsafe-eval'` lets WebAssembly compile (it does not allow JavaScript `eval`) and `worker-src 'self'` allows the same-origin worker, both for on-device voice transcription. `Permissions-Policy` allows the microphone for this origin only. API responses keep `default-src 'none'`.
 - Hashed files under `/assets/` are cached as immutable. `index.html` and all API responses are `no-store`.
 - `MATRA_PEPPER` is required. The server refuses to start without it.
-- The sealed-matching **threshold OPRF** key set is required: every share `MATRA_OPRF_SHARE_<i>` (in-process mode), or the remote holders' URLs, pinned share public keys and the holder-token key (remote mode). Shares are **never generated automatically in production** and `…_FILE` paths must be outside the database directory: whoever holds t shares and the database can recover every sealed phone number by brute force in seconds. The old additive `MATRA_OPRF_KEY_A/B` are a fatal startup error.
-- Sealed matching asks each survivor to confirm a phone by SMS first (W13). The SMS provider defaults to **Twilio
+- `MATRA_MATCHING` is required (`off` for the pilot; above).
+- With `MATRA_MATCHING=on`, the sealed-matching **threshold OPRF** key set is required: every share `MATRA_OPRF_SHARE_<i>` (in-process mode), or the remote holders' URLs, pinned share public keys and the holder-token key (remote mode). Shares are **never generated automatically in production** and `…_FILE` paths must be outside the database directory: whoever holds t shares and the database can recover every sealed phone number by brute force in seconds. The old additive `MATRA_OPRF_KEY_A/B` are a fatal startup error.
+- With matching on, sealed matching asks each survivor to confirm a phone by SMS first (W13). The SMS provider defaults to **Twilio
   Verify** (`MATRA_SMS_PROVIDER=twilio` + `TWILIO_*`); the **mock** provider (no texts are sent, the code is shown on
   screen, nothing about the phone is verified) is refused unless `MATRA_DEMO_MODE=1`. `MATRA_PHONE_HASH_KEY` (or
   `_FILE`, outside the database directory) is required and never generated. `MATRA_REQUIRE_PHONE_VERIFICATION=0` is
@@ -57,13 +78,22 @@ npx playwright test -c playwright.prod.config.ts --grep @voice
 To check the production build locally, including the full browser suite under the CSP with the banner on:
 
 ```sh
-MATRA_DEMO_MODE=1 npm run build      # a production build without matcher pins is refused unless it is a demo build
+MATRA_DEMO_MODE=1 MATRA_MATCHING=on npm run build   # a production build must set MATRA_MATCHING; with it on, a build
+                                                    # without matcher pins is refused unless it is a demo build
 npm run -s -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out /tmp/matra-keys --force   # prints the pins
-NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) \
+NODE_ENV=production MATRA_MATCHING=on MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) \
   MATRA_PEPPER=$(openssl rand -hex 32) MATRA_OPRF_SHARE_1_FILE=/tmp/matra-keys/oprf-share-1.key \
   MATRA_OPRF_SHARE_2_FILE=/tmp/matra-keys/oprf-share-2.key MATRA_OPRF_SHARE_3_FILE=/tmp/matra-keys/oprf-share-3.key \
   MATRA_DB_PATH=/tmp/matra-demo/matra.db npm start   # http://localhost:4000 (in-process holders)
 npm run e2e:prod      # the demo-path scenarios against the production build on port 4300, with 3 separate holder processes
+```
+
+The pilot build and server, with sealed matching off (no OPRF keys, no phone key, no matcher):
+
+```sh
+MATRA_MATCHING=off MATRA_COUNSELOR_ROSTER_PUBKEY=… npm run build    # the build audit checks no matching code shipped
+NODE_ENV=production MATRA_MATCHING=off MATRA_PEPPER=$(openssl rand -hex 32) MATRA_DB_PATH=/tmp/matra-pilot/matra.db npm start
+npm run e2e:pilot     # the pilot path in a browser: no matching question or call; share still works
 ```
 
 For a live demo on one laptop, `npm run demo` starts the whole stack (3 key holders, the matcher, the app server, the web
@@ -75,6 +105,7 @@ machine on purpose, which a real deployment must never do.
 | Variable | Demo value | Notes |
 |---|---|---|
 | `NODE_ENV` | `production` | Serves the web app and enforces the production checks |
+| `MATRA_MATCHING` | `on` (demo) / `off` (pilot) | Sealed matching in this deployment. **Required in production**, at build time (Docker `--build-arg`) and at run time; outside production the default is `off`. Off refuses every matching-only variable below (see "Sealed matching: off or on" above) |
 | `MATRA_PEPPER` | random, ≥ 32 chars | HMAC key for escrow hashes and fake prelogin salts. **Secret.** Set it once and never change it: changing it breaks escrow matching for existing entries. Generate with `openssl rand -hex 32` |
 | `MATRA_DEMO_BANNER` | `1` | Shows "DEMO — do not enter real information" on every page |
 | `MATRA_DEMO_MODE` | `1` | Fictional-data demo: lets mock/simulated providers (the mock SMS provider) run in production, and turns the DEMO banner on. **Never on an instance with real data** |
@@ -129,6 +160,8 @@ deployer can configure it:
 
 ## Sealed matching: keys, pins and the counselor roster
 
+Only with `MATRA_MATCHING=on`. A pilot with matching off skips this section and the next one entirely.
+
 1. **OPRF key ceremony (dealer).** Offline, on a machine nobody keeps: `npm run -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out <dir>`. It writes `oprf-share-<i>.key` (mode 0600) and prints `{ t, m, groupPublicKey, holders: [{ index, publicKey }] }`. Hand each share file to a **different** holder institution, then delete `<dir>`. The dealer briefly knew the whole key; a dealer-free DKG is future work (SECURITY_WHITEPAPER.md §4a).
 2. **Run the holders.**
    - *Demo, one host (in-process):* give the app server every share (`MATRA_OPRF_SHARE_<i>_FILE`, outside the database volume and its backups). This is fine for fictional data but gives **no separation against the operator**.
@@ -181,6 +214,7 @@ The repository includes [`render.yaml`](../render.yaml). It defines one Docker w
 
 - a 1 GB persistent disk mounted at `/app/apps/server/data` (SQLite database),
 - a health check on `/api/health`,
+- `MATRA_MATCHING=on` (this demo shows sealed matching; Render also passes it to the Docker build),
 - `MATRA_PEPPER` generated by Render on first deploy (`generateValue`),
 - `MATRA_OPRF_SHARE_1..3` declared but **not** generated (`sync: false`): Render cannot generate consistent Shamir shares. Run the ceremony (step 1 above) and paste each share's hex into the dashboard before the first deploy. All three shares then sit with one operator (in-process): demo only,
 - `MATRA_DEMO_BANNER=1` and `MATRA_TRUST_PROXY=1`,
@@ -204,9 +238,10 @@ Unverified on Render: the container runs as the non-root `node` user. If the mou
 ## Option B: any Docker host
 
 ```sh
-docker build -t matra .
+docker build --build-arg MATRA_MATCHING=on --build-arg MATRA_DEMO_MODE=1 -t matra .
 docker volume create matra-data
 docker run -d --name matra -p 8080:8080 \
+  -e MATRA_MATCHING=on \
   -e MATRA_PEPPER="$(openssl rand -hex 32)" \
   -e MATRA_OPRF_SHARE_1="$(cat ~/matra-ceremony/oprf-share-1.key)" \
   -e MATRA_OPRF_SHARE_2="$(cat ~/matra-ceremony/oprf-share-2.key)" \
@@ -216,6 +251,9 @@ docker run -d --name matra -p 8080:8080 \
   matra
 docker exec matra node --import tsx apps/server/src/seed.ts
 ```
+
+This is a demo with sealed matching on. For the pilot, build with `--build-arg MATRA_MATCHING=off` (plus the org key),
+run with `-e MATRA_MATCHING=off`, and pass no OPRF share or other matching variable: the server refuses them.
 
 First run the ceremony on your machine (`npm run -w @matra/server oprf-ceremony -- --out ~/matra-ceremony`). Store the pepper and the OPRF key shares somewhere safe, **separately from the data volume** (for example, your host's secret manager). You must pass the same value on every restart.
 

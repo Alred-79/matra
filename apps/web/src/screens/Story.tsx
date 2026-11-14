@@ -7,7 +7,6 @@ import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common'
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
 import {
-  MatchingError,
   UnreadableVaultError,
   foldInLateEvidence,
   latestOf,
@@ -20,9 +19,10 @@ import {
 } from '../lib/vault';
 import { UnreadableNote } from '../components/UnreadableNote';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
-import { lodgeMatches } from '../space/adapters';
 import { matchContactOf } from '../intake/record';
 import { PhoneStepCard } from '../components/PhoneStepCard';
+import { MatchingError, lodgeMatches } from '../lib/matching';
+import { matchingApi } from '../api/matching';
 
 /** Autosave to her vault: at most one save per minute, a moment after a meaningful change. */
 const MIN_GAP_MS = 60_000;
@@ -299,11 +299,12 @@ export function Story() {
       let escrowed = boot.previousEscrowed;
       let escrowNote: string | undefined;
       let needsPhone = false;
-      if (record.perpetrators.some((p) => p.escrowOptIn && p.identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'))) {
+      // Sealed matching only in a build that has it (MATRA_MATCHING=on); a pilot build never sets escrowOptIn either.
+      if (__MATRA_MATCHING__ && record.perpetrators.some((p) => p.escrowOptIn && p.identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'))) {
         setSealing('Sealing the names you chose for escrow…');
         try {
           escrowed = await lodgeMatches(
-            api,
+            matchingApi(api),
             session.masterKey,
             record,
             boot.previousEscrowed,
@@ -357,8 +358,8 @@ export function Story() {
           </p>
           <p className="mono muted small">{shortHash(sealed.contentHash, 16)}</p>
         </div>
-        {sealed.escrowNote && <div className="card warn">{sealed.escrowNote}</div>}
-        {sealed.needsPhone && <PhoneStepCard />}
+        {__MATRA_MATCHING__ && sealed.escrowNote && <div className="card warn">{sealed.escrowNote}</div>}
+        {__MATRA_MATCHING__ && sealed.needsPhone && <PhoneStepCard />}
         <div className="card stack">
           <h2>What you can do next — only if and when you want</h2>
           <div className="row">

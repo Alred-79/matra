@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { IntakeRecord } from '@matra/shared';
 import { draftToRecord, emptyDraft, STEPS, type IntakeDraft } from './index';
+
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
 
 const NARRATIVE =
   '  It started at the party.\n\n\tHe said "don\'t tell anyone" 😶‍🌫️ — I left at ~2am…  \r\nI remember {braces} [brackets] & <tags>.   ';

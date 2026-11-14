@@ -16,7 +16,7 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 | Trauma-informed UX | **B / unvalidated** | Skip-anything, Quick Exit, triple-Esc, 15-minute idle lock, 18+ gate. **No advocate has reviewed the script yet**, which is the single biggest credibility gap |
 | Legal posture | **B+ research / F review** | Excellent memo. Zero review by licensed counsel |
 | Ops readiness | **D+** | No hosted demo URL, no entity, no legal-request policy, no audit, no CI. *weekend-mvp:* drafts in [ops/](ops/): incident-response plan (pending counsel), n-of-m deploy governance (proposed, not configured), hosting comparison (nothing provisioned), export-control question |
-| Escrow (matching) | **C+, demo-only** | Survivor self-probing is closed. *weekend-mvp* (details in §0): 2-of-3 threshold OPRF with separate holder processes, phone verify-then-forget, a separate matcher routing each group to one counselor by state, counselor-first staged release. Still demo-only: the operator can test guessed identifiers in both holder modes (W2, W14), attestation is simulated (W18), the contact gate is server-side (W21), phones are friction, not Sybil resistance (W13, W19). Correctly kept off for any pilot |
+| Escrow (matching) | **C+, demo-only** | Survivor self-probing is closed. *weekend-mvp* (details in §0): 2-of-3 threshold OPRF with separate holder processes, phone verify-then-forget, a separate matcher routing each group to one counselor by state, counselor-first staged release. Still demo-only: the operator can test guessed identifiers in both holder modes (W2, W14), attestation is simulated (W18), the contact gate is server-side (W21), phones are friction, not Sybil resistance (W13, W19). Correctly kept off for any pilot: `MATRA_MATCHING=off` leaves it out of the build and the server |
 
 ## 0. Branch `weekend-mvp` (2026-11-11): what shipped
 
@@ -129,7 +129,7 @@ Short items that you or a contributor can do now, in rough priority order:
 
 ### 4. Leave alone for now
 
-- Escrow beyond the demo. The OPRF, threshold key and counselor model now exist in demo form (weekend-mvp), but keep matching off for any pilot until the W13, W14, W18 and W21 residuals are closed. In conversations, present it as a research question, not a feature.
+- Escrow beyond the demo. The OPRF, threshold key and counselor model now exist in demo form (weekend-mvp), but keep matching off for any pilot until the W13, W14, W18 and W21 residuals are closed. `MATRA_MATCHING=off` does that: the pilot build and server leave matching out entirely (no screens, questions, routes or keys; docs/DEPLOY.md), and production must set the switch explicitly. In conversations, present it as a research question, not a feature.
 - NY expansion, Spanish, Shamir recovery (recovery shares with people she trusts; the single recovery code she holds herself is built, W20). Do these after the NJ pilot.
 
 ## How to talk about readiness in one sentence

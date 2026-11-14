@@ -10,6 +10,12 @@ import { fakeAuthFetch } from '../test/fakeServer';
 import { Harness, current } from '../test/sessionHarness';
 import { ReportRequest } from './ReportRequest';
 
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
+
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 describe('ReportRequest: saved versions that could not be opened', () => {

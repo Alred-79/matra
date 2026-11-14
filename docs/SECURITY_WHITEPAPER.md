@@ -130,6 +130,14 @@ from the paper (no AGPL code copied) with modern standard primitives. Code: `pac
 `holder.ts` (key holders), `apps/server/src/app.ts` (`/api/matching/*`, `/api/counselor/*`),
 `apps/web/src/counselor/` (counselor portal). **Not audited.**
 
+**Off by default for the pilot.** All of this runs only with `MATRA_MATCHING=on`. With `MATRA_MATCHING=off` (the pilot
+setting; production must set one or the other) the web build contains none of it: no matching questions, screens, OPRF
+client or matching API calls (`scripts/audit-web-build.mjs` fails the build if their route strings appear). The app
+server loads no key share, phone key or matcher, writes nothing to `matching_meta`, answers 404 `matching_disabled` on
+every matching, escrow, counselor and report route, refuses counselor sign-ups, and refuses to start if a matching
+secret is configured (`apps/server/src/matching-off.ts`). Nothing in a survivor's record opts into matching
+(`escrowOptIn` is always false).
+
 **Parties.** Survivor client · OPRF key holders 1..m (any t of them; default 2-of-3) · app server (stores ciphertext and tags, no
 secrets) · the **matcher** (decides which groups are released and to which ONE counselor, from routing data the app
 server cannot read; see "Matcher" below) · verified Legal Options Counselor(s) (an RSA-OAEP-3072 identity key, like

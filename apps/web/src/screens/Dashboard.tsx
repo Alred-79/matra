@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/shared';
+import type { AttorneyProfile, AuditEvent, EscrowEntry, Share, SurvivorReportRequest } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { escrowLabel, finals, hasUnsealedMatches, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { matchingApi } from '../api/matching';
+import { escrowLabel, hasUnsealedMatches } from '../lib/matching';
 import { UnreadableNote } from '../components/UnreadableNote';
 import { PhoneStepCard } from '../components/PhoneStepCard';
 import { ExportCard } from '../components/ExportCard';
@@ -27,8 +29,10 @@ const AUDIT_TEXT: Record<string, string> = {
   // client refines this using records it can decrypt.
   'record.created': 'You saved to your space',
   'blob.uploaded': 'Evidence added to your space',
-  'escrow.created': 'You sealed a match',
-  'escrow.withdrawn': 'You withdrew a sealed match',
+  ...(__MATRA_MATCHING__ && {
+    'escrow.created': 'You sealed a match',
+    'escrow.withdrawn': 'You withdrew a sealed match',
+  }),
   'share.created': 'You shared your file with an attorney',
   'share.revoked': 'You took back an attorney’s access',
   'attorney.opened_share': 'Attorney opened your file',
@@ -36,12 +40,14 @@ const AUDIT_TEXT: Record<string, string> = {
   // verify-attorney (server attorney-verification.ts): her share is paused, not revoked; she decides
   'attorney.unverified': 'An attorney you shared with is no longer verified by Matra. Their access is paused: you can revoke it or keep it',
   'attorney.reverified': 'An attorney you shared with is verified by Matra again, so their access is back on',
-  // staged release (her side)
-  'report.released': 'You shared your report with a legal options counselor',
-  'report.declined': 'You decided not to share your report',
-  'report.revoked': 'You stopped sharing your report with a legal options counselor',
-  'counselor.opened_report': 'The legal options counselor opened your report',
-  'counselor.downloaded_evidence': 'The legal options counselor downloaded one of your evidence files',
+  // staged release (her side; only in a build with sealed matching)
+  ...(__MATRA_MATCHING__ && {
+    'report.released': 'You shared your report with a legal options counselor',
+    'report.declined': 'You decided not to share your report',
+    'report.revoked': 'You stopped sharing your report with a legal options counselor',
+    'counselor.opened_report': 'The legal options counselor opened your report',
+    'counselor.downloaded_evidence': 'The legal options counselor downloaded one of your evidence files',
+  }),
   // attorney-side events
   'share.received': 'A client shared a file with you',
   'share.opened': 'You opened a shared file',
@@ -67,7 +73,7 @@ export function describeAudit(e: AuditEvent, kindBySeq?: Map<number, OpenedRecor
   if (/blob.*(download|read)/.test(a)) return 'A shared evidence file was downloaded';
   if (/revoke/.test(a)) return 'You took back an attorney’s access';
   if (/share/.test(a)) return 'You shared your file with an attorney';
-  if (/escrow/.test(a)) return /withdr/.test(a) ? 'You withdrew a sealed match' : 'You sealed a match';
+  if (__MATRA_MATCHING__ && /escrow/.test(a)) return /withdr/.test(a) ? 'You withdrew a sealed match' : 'You sealed a match';
   if (/blob|evidence/.test(a)) return 'Evidence added to your space';
   if (/record/.test(a)) return 'You saved to your space';
   if (/register|signup|account\.create/.test(a)) return 'You created your space';
@@ -134,10 +140,16 @@ export function Dashboard() {
   const vault = useAsync(() => loadVault(api, mk, { includeProfile: true }), [api, mk]);
   const blobs = useAsync(() => api.listBlobs().then((r) => r.blobs), [api]);
   const working = useAsync(() => getWorkingData(), [getWorkingData, workingVersion]);
-  const escrow = useAsync(async () => {
-    const { entries } = await api.listEscrow();
-    return Promise.all(entries.map(async (e) => ({ entry: e, label: await escrowLabel(e.labelEnvelope, mk) })));
-  }, [api, mk]);
+  // Sealed matching only in a build that has it (MATRA_MATCHING=on); the other branch is all a pilot build contains.
+  const escrow = useAsync(
+    __MATRA_MATCHING__
+      ? async () => {
+          const { entries } = await matchingApi(api).listEscrow();
+          return Promise.all(entries.map(async (e) => ({ entry: e, label: await escrowLabel(e.labelEnvelope, mk) })));
+        }
+      : async () => [],
+    [api, mk],
+  );
   const shares = useAsync(async () => {
     const [{ shares }, atts] = await Promise.all([api.listShares(), api.listAttorneys().catch(() => ({ attorneys: [] as AttorneyProfile[] }))]);
     const byId = new Map(atts.attorneys.map((a) => [a.userId, a]));
@@ -145,18 +157,26 @@ export function Dashboard() {
   }, [api]);
   const audit = useAsync(() => api.listAudit().then((r) => r.events), [api]);
   // Staged release: a counselor who has already spoken with her asked for her full report. Shown only to her.
-  const reportRequests = useAsync(() => api.reportRequests().then((r) => r.requests), [api]);
+  const reportRequests = useAsync(
+    __MATRA_MATCHING__ ? () => matchingApi(api).reportRequests().then((r) => r.requests) : async (): Promise<SurvivorReportRequest[]> => [],
+    [api],
+  );
   const pendingRequests = (reportRequests.data ?? []).filter((r) => r.status === 'pending');
   const sharingReports = (reportRequests.data ?? []).filter(
     (r) => r.release?.status === 'active' && Date.parse(r.release.expiresAt) > Date.now(),
   );
   // Her sealed record chose a sealed match that is waiting for a phone confirmation (W13; counselor/PhoneVerify.tsx).
-  const phoneStep = useAsync(async () => {
-    const final = vault.data && latestOf(vault.data, 'final');
-    if (!final?.payload.record || !(await hasUnsealedMatches(final.payload.record, final.payload.escrowedHashes))) return false;
-    const st = await api.phoneVerificationStatus();
-    return st.required && !st.verified;
-  }, [api, vault.data]);
+  const phoneStep = useAsync(
+    __MATRA_MATCHING__
+      ? async () => {
+          const final = vault.data && latestOf(vault.data, 'final');
+          if (!final?.payload.record || !(await hasUnsealedMatches(final.payload.record, final.payload.escrowedHashes))) return false;
+          const st = await matchingApi(api).phoneVerificationStatus();
+          return st.required && !st.verified;
+        }
+      : async () => false,
+    [api, vault.data],
+  );
   const [showAllActivity, setShowAllActivity] = useState(false);
 
   const records = vault.data ?? [];
@@ -230,7 +250,7 @@ export function Dashboard() {
         </div>
       </section>
 
-      {pendingRequests.map((r) => (
+      {__MATRA_MATCHING__ && pendingRequests.map((r) => (
         <section key={r.id} className="card warm stack" aria-label="A request for your report" data-testid="home-report-request">
           <p style={{ margin: 0 }}>
             <strong>A legal options counselor has asked to see your report.</strong> You don’t have to decide now, and you can
@@ -243,7 +263,7 @@ export function Dashboard() {
           </div>
         </section>
       ))}
-      {sharingReports.map((r) => (
+      {__MATRA_MATCHING__ && sharingReports.map((r) => (
         <section key={r.id} className="card soft stack" aria-label="A report you are sharing" data-testid="home-report-shared">
           <p style={{ margin: 0 }}>
             You’re sharing your report with {r.counselor.displayName}, a legal options counselor, until{' '}
@@ -408,30 +428,32 @@ export function Dashboard() {
         )}
       </section>
 
-      {/* ── escrow ── */}
-      <section className="card stack" aria-labelledby="escrow" data-testid="home-escrow">
-        <div className="section-title">
-          <h2 id="escrow">Sealed matches</h2>
-          <Link className="btn btn-small" to="/vault/matching" data-testid="home-matching-link">Review or withdraw</Link>
-        </div>
-        <p className="small muted">
-          If you chose a sealed match, the email, phone number, or social media profile you gave was sealed on this device
-          before it was sent. Only a Legal Options Counselor ever sees a match. This list will always say “Sealed” —
-          that’s on purpose, so no one can use this page to find out whether they’ve been named.
-        </p>
-        {phoneStep.data && <PhoneStepCard />}
-        {escrow.loading && <Loading />}
-        {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
-        {escrow.data && escrow.data.length === 0 && <p className="muted">Nothing sealed.</p>}
-        {escrow.data?.map(({ entry, label }) => <EscrowCard key={entry.id} entry={entry} label={label} />)}
-        {escrow.data && escrow.data.length > 0 && (
+      {/* ── escrow (only in a build with sealed matching) ── */}
+      {__MATRA_MATCHING__ && (
+        <section className="card stack" aria-labelledby="escrow" data-testid="home-escrow">
+          <div className="section-title">
+            <h2 id="escrow">Sealed matches</h2>
+            <Link className="btn btn-small" to="/vault/matching" data-testid="home-matching-link">Review or withdraw</Link>
+          </div>
           <p className="small muted">
-            If someone else names the same person, a Legal Options Counselor — a licensed attorney, not the police, not
-            your school — may reach out to you privately, the way you chose. You can say no, and there are no fees. A match
-            is a lead, not evidence. Names are never used.
+            If you chose a sealed match, the email, phone number, or social media profile you gave was sealed on this device
+            before it was sent. Only a Legal Options Counselor ever sees a match. This list will always say “Sealed” —
+            that’s on purpose, so no one can use this page to find out whether they’ve been named.
           </p>
-        )}
-      </section>
+          {phoneStep.data && <PhoneStepCard />}
+          {escrow.loading && <Loading />}
+          {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
+          {escrow.data && escrow.data.length === 0 && <p className="muted">Nothing sealed.</p>}
+          {escrow.data?.map(({ entry, label }) => <EscrowCard key={entry.id} entry={entry} label={label} />)}
+          {escrow.data && escrow.data.length > 0 && (
+            <p className="small muted">
+              If someone else names the same person, a Legal Options Counselor — a licensed attorney, not the police, not
+              your school — may reach out to you privately, the way you chose. You can say no, and there are no fees. A match
+              is a lead, not evidence. Names are never used.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* ── shares ── */}
       <section className="card stack" aria-labelledby="shares" data-testid="home-shares">

@@ -8,6 +8,11 @@
  *   3. JS / CSS / HTML / JSON: every http(s) host named anywhere is on the allowlist below, each with the reason it
  *      appears; nothing on the tracker list appears at all. A new host fails the build until someone looks at it.
  *
+ *   4. Sealed matching left out (MATRA_MATCHING=off, the pilot default; `--matching=on|off` overrides the variable):
+ *      no matching, escrow, counselor or report API route, no OPRF code, no matching or counselor screen route. A
+ *      build with MATRA_MATCHING=on skips this check. (Tree-shaking can leave an empty chunk behind, named after a
+ *      module it emptied; what counts is that none of these strings is in any shipped file.)
+ *
  * Hosts in shipped code are not the same as requests: the CSP (apps/server/src/app.ts WEB_CSP) is what stops the
  * browser from contacting anything but this origin (connect-src/script-src/img-src… 'self'), and the e2e suite fails
  * on any request to another origin (e2e/helpers.ts). This audit catches a dependency or a change that would ADD one.
@@ -17,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = path.resolve(process.argv[2] || path.join(ROOT, 'apps/web/dist'));
+const DIST = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) || path.join(ROOT, 'apps/web/dist'));
 
 /** host → why it may appear in shipped code. None of these is fetched by the app. */
 const ALLOWED_HOSTS = {
@@ -43,6 +48,22 @@ const FORBIDDEN = [
   'segment.com', 'sentry.io', 'sentry-cdn', 'posthog', 'mixpanel', 'amplitude.com', 'hotjar', 'fullstory', 'logrocket',
   'plausible.io', 'cloudflareinsights', 'newrelic', 'nr-data.net', 'datadoghq', 'clarity.ms', 'facebook.net', 'intercom.io',
 ];
+
+/**
+ * Strings a build without sealed matching must not contain (case-insensitive): the API routes it would call, the OPRF
+ * client, and the app's own matching and counselor screen routes. Plain words like "counselor" in survivor-facing copy
+ * ("a school counselor") are fine; these are route and protocol strings.
+ */
+const MATCHING_ONLY = [
+  '/api/matching', '/api/escrow', '/api/counselor', '/api/report-requests', '/api/report-releases', 'oprf',
+  'vault/matching', 'vault/requests', 'counselor/matches', 'counselor/reports',
+];
+const matchingArg = process.argv.find((a) => a.startsWith('--matching='))?.slice('--matching='.length);
+const matchingMode = (matchingArg ?? process.env.MATRA_MATCHING ?? '').trim().toLowerCase() || 'off';
+if (matchingMode !== 'off' && matchingMode !== 'on') {
+  console.error(`[audit-web] MATRA_MATCHING (or --matching=) must be "off" or "on", got "${matchingMode}"`);
+  process.exit(1);
+}
 
 const problems = [];
 if (!fs.existsSync(DIST)) {
@@ -73,6 +94,9 @@ for (const f of files) {
   }
   // 3. hosts + trackers
   for (const bad of FORBIDDEN) if (lower.includes(bad)) problems.push(`${rel(f)}: mentions ${bad}`);
+  // 4. sealed matching left out
+  if (matchingMode === 'off')
+    for (const m of MATCHING_ONLY) if (lower.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_MATCHING=off build`);
   for (const m of text.matchAll(/\b(?:https?|wss?):\/\/([a-z0-9.-]+)/gi)) {
     const h = m[1].toLowerCase().replace(/\.$/, '');
     if (!hosts.has(h)) hosts.set(h, new Set());
@@ -86,6 +110,12 @@ if (problems.length) {
   console.error(`[audit-web] ${problems.length} problem(s) in ${DIST}:`);
   for (const p of problems) console.error(`  - ${p}`);
   console.error('[audit-web] Every host the shipped app names must be on the allowlist in scripts/audit-web-build.mjs, with a reason.');
+  if (matchingMode === 'off')
+    console.error('[audit-web] A MATRA_MATCHING=off build must not ship sealed-matching code: put it behind __MATRA_MATCHING__ (apps/web/src/build-flags.d.ts).');
   process.exit(1);
 }
-console.log(`[audit-web] ok: ${files.length} files, no third-party requests or trackers; hosts named: ${[...hosts.keys()].sort().join(', ') || 'none'}`);
+console.log(
+  `[audit-web] ok: ${files.length} files, no third-party requests or trackers` +
+    `${matchingMode === 'off' ? ', no sealed-matching code (MATRA_MATCHING=off)' : ' (MATRA_MATCHING=on: matching check skipped)'}; ` +
+    `hosts named: ${[...hosts.keys()].sort().join(', ') || 'none'}`,
+);

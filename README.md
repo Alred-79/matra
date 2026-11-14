@@ -24,6 +24,7 @@ Requires Node.js and npm.
 npm install
 npm run seed     # creates fictional demo accounts (synthetic data only)
 npm run dev      # API on http://localhost:4000, web app on http://localhost:5173
+                 # sealed matching is off by default; MATRA_MATCHING=on npm run seed / npm run dev turn it on
 npm test
 npm run typecheck
 ```
@@ -33,10 +34,10 @@ Open http://localhost:5173.
 Production build (the API server also serves the built web app, under a strict CSP):
 
 ```sh
-npm run build
-NODE_ENV=production MATRA_PEPPER=$(openssl rand -hex 32) npm start   # http://localhost:4000
-npm run e2e          # browser suite against the dev stack
-npm run e2e:prod     # the same suite against the production build
+MATRA_DEMO_MODE=1 MATRA_MATCHING=off npm run build    # production builds must say MATRA_MATCHING=off|on
+NODE_ENV=production MATRA_MATCHING=off MATRA_PEPPER=$(openssl rand -hex 32) npm start   # http://localhost:4000
+npm run e2e          # browser suites: the demo path (matching on), the pilot path (off), the demo stack
+npm run e2e:prod     # the demo path against a production build (build it with MATRA_MATCHING=on)
 ```
 
 Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md).
@@ -49,7 +50,7 @@ Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md
 | `attorney.nj1` | Verified attorney (NJ) | `demo-attorney-passphrase` |
 | `attorney.ny1` | Verified attorney (NY) | `demo-attorney-passphrase` |
 | `attorney.nj2` | Verified attorney (NJ/NY) | `demo-attorney-passphrase` |
-| `counselor.demo` | Legal Options Counselor (sealed-matching demo; sign in via "I’m an attorney" or `/counselor`) | `demo-counselor-passphrase` |
+| `counselor.demo` | Legal Options Counselor (sealed-matching demo, only seeded with `MATRA_MATCHING=on`; sign in via "I’m an attorney" or `/counselor`) | `demo-counselor-passphrase` |
 
 All names and organizations are fictional and labelled "Demo —". For a guided walkthrough, see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
@@ -62,7 +63,8 @@ All names and organizations are fictional and labelled "Demo —". For a guided 
 | `MATRA_CORS_ORIGINS` | Comma-separated allowed origins (rarely needed; the Vite dev server proxies `/api`) |
 | `MATRA_DEMO_BANNER` | `1` shows a "DEMO — do not enter real information" banner on every page (production serving) |
 | `MATRA_TRUST_PROXY` | Number of reverse-proxy hops to trust for client IPs (rate limiting), e.g. `1` on Render |
-| `MATRA_OPRF_SHARE_<i>` (or `_FILE` variants), `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS` | The sealed-matching threshold OPRF key shares (default 2-of-3), from `npm run -w @matra/server oprf-ceremony`. In production run each holder as its own process (`npm run -w @matra/server holder`; see docs/DEPLOY.md) and keep shares secret; in development a ceremony runs once into `apps/server/data/oprf-share-<i>.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing share fatal |
+| `MATRA_MATCHING` | `off` or `on`: sealed matching in this deployment, for the server and the web build. Off (the default outside production, and the pilot setting) leaves it out entirely and refuses every matching variable below. **Required in production.** See docs/DEPLOY.md |
+| `MATRA_OPRF_SHARE_<i>` (or `_FILE` variants), `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS` | With `MATRA_MATCHING=on`: the sealed-matching threshold OPRF key shares (default 2-of-3), from `npm run -w @matra/server oprf-ceremony`. In production run each holder as its own process (`npm run -w @matra/server holder`; see docs/DEPLOY.md) and keep shares secret; in development a ceremony runs once into `apps/server/data/oprf-share-<i>.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing share fatal |
 | `MATRA_OPRF_PER_DAY`, `MATRA_OPRF_LIFETIME` | Per-account rate limits on matching evaluations (defaults 10/day, 50 lifetime) |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | `1` auto-verifies new attorney accounts. **Development only.** Otherwise use `npm run -w @matra/server verify-attorney -- <username>` |
 

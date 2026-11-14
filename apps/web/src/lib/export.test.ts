@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { deriveKeys, encryptBlob, encryptJSON, generateContentKey, newKdfSalt, sha256Hex, wrapKeyWithMaster } from '@matra/crypto';
 import type { BlobMeta, VaultRecord } from '@matra/shared';
 import { envelopeHash, type ApiClient } from '../api/client';
+import { MatchingApiClient } from '../api/matching';
 import { buildDataExport } from './export';
 import { sampleRecord } from '../brief/fixtures';
 
@@ -24,8 +25,19 @@ function unzip(zip: Uint8Array): Map<string, Uint8Array> {
   return out;
 }
 
+/** Sealed matching on or off for one test (the export reads __MATRA_MATCHING__ when it runs). */
+const g = globalThis as { __MATRA_MATCHING__?: boolean };
+const initial = g.__MATRA_MATCHING__;
+afterEach(() => {
+  g.__MATRA_MATCHING__ = initial;
+});
+
 describe('buildDataExport', () => {
-  it('decrypts every record and evidence file into one archive, with a verifiable manifest', async () => {
+  it.each([
+    ['off', false, ['README.txt', 'records.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'shares.json', 'activity.json']],
+    ['on', true, ['README.txt', 'records.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'escrow.json', 'shares.json', 'activity.json']],
+  ])('decrypts every record and evidence file into one archive, with a verifiable manifest (matching %s)', async (_mode, on, names) => {
+    g.__MATRA_MATCHING__ = on;
     const { masterKey } = await deriveKeys('export test passphrase', newKdfSalt(), 1000);
     const photo = new TextEncoder().encode('pretend-jpeg-bytes');
     const photoSha = await sha256Hex(photo);
@@ -42,7 +54,7 @@ describe('buildDataExport', () => {
       id: 'r'.repeat(32), ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
       ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(recKey, masterKey),
     };
-    const api = {
+    const fake = {
       listRecords: async () => ({ records: [rec] }),
       getRecord: async () => ({ record: rec }),
       getLedgerEntry: async () => { throw new Error('offline'); },
@@ -51,14 +63,19 @@ describe('buildDataExport', () => {
       listEscrow: async () => ({ entries: [] }),
       listShares: async () => ({ shares: [] }),
       listAudit: async () => ({ events: [] }),
-    } as unknown as ApiClient;
+    };
+    // a build with sealed matching has the matching client (lib/session.tsx); a pilot build has the plain one
+    const api = (on ? Object.assign(Object.create(MatchingApiClient.prototype), fake) : fake) as ApiClient;
 
     const out = await buildDataExport(api, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'));
     expect(out.fileName).toBe('matra-my-data-2026-10-07.zip');
     expect(out).toMatchObject({ recordCount: 1, evidenceCount: 1, problems: [] });
     const files = unzip(out.zip);
-    expect([...files.keys()]).toEqual(['README.txt', 'records.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'escrow.json', 'shares.json', 'activity.json']);
-    expect(new TextDecoder().decode(files.get('README.txt'))).toMatch(/NOT encrypted/);
+    expect([...files.keys()]).toEqual(names);
+    const readme = new TextDecoder().decode(files.get('README.txt'));
+    expect(readme).toMatch(/NOT encrypted/);
+    // the README lists escrow.json only where the archive has one
+    expect(readme.includes('escrow.json')).toBe(on);
     const records = JSON.parse(new TextDecoder().decode(files.get('records.json')));
     expect(records.records[0].payload.record.narrative.freeRecall).toBe(sampleRecord.narrative.freeRecall);
     expect(records.records[0].fingerprintVerified).toBe(true);
@@ -70,6 +87,7 @@ describe('buildDataExport', () => {
   });
 
   it('says in the manifest and the result when saved versions could not be opened (never a silently partial copy)', async () => {
+    g.__MATRA_MATCHING__ = false; // not about sealed matching; a plain client, as in a pilot build
     const { masterKey } = await deriveKeys('export test passphrase', newKdfSalt(), 1000);
     const recKey = await generateContentKey();
     const envelope = await encryptJSON({ kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, recKey);
