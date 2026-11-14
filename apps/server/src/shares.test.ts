@@ -247,7 +247,7 @@ describe('unverifying an attorney pauses access to existing shares', () => {
     expect((await request(app).get('/api/shares').set(atty.auth)).status).toBe(401);
     const login = await request(app).post('/api/auth/login').send({ username: 'atty.unv', authKey: atty.authKey });
     expect(login.status).toBe(200);
-    const again = { Authorization: `Bearer ${login.body.token}` };
+    let again = { Authorization: `Bearer ${login.body.token}` };
     for (const r of await Promise.all(routes(again))) {
       expect(r.status).toBe(403);
       expect(r.body.code).toBe('attorney_not_verified');
@@ -258,8 +258,12 @@ describe('unverifying an attorney pauses access to existing shares', () => {
     const janeEvents = (await request(app).get('/api/audit').set(jane.auth)).body.events as Array<{ action: string; detail?: string }>;
     const notice = janeEvents.find((e) => e.action === 'attorney.unverified');
     expect(notice?.detail).toMatch(/no longer verified by Matra.*paused/);
-    // revoking twice changes nothing and writes no second notice
-    expect(setVerified(db, 'atty.unv', false)).toMatchObject({ changed: false, survivorsNotified: 0 });
+    // revoking twice writes no second notice, but still signs the attorney out (a re-run --revoke must never leave a session open)
+    expect(setVerified(db, 'atty.unv', false)).toMatchObject({ changed: false, sessionsEnded: 1, survivorsNotified: 0 });
+    expect((await request(app).get('/api/shares').set(again)).status).toBe(401);
+    const relogin = await request(app).post('/api/auth/login').send({ username: 'atty.unv', authKey: atty.authKey });
+    expect(relogin.status).toBe(200);
+    again = { Authorization: `Bearer ${relogin.body.token}` };
     expect(((await request(app).get('/api/audit').set(jane.auth)).body.events as Array<{ action: string }>).filter((e) => e.action === 'attorney.unverified')).toHaveLength(1);
 
     // re-verified: access is back, and she is told
