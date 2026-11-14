@@ -127,7 +127,7 @@ describe('StorySpace', () => {
     expect(within(care).getByRole('heading', { name: 'Care you can get soon after' })).toHaveFocus();
     expect(care).toHaveTextContent('without reporting to police');
     expect(care).toHaveTextContent('usually possible up to 7 days after, sometimes longer');
-    expect(care).toHaveTextContent('ideally within 72 hours');
+    expect(care).toHaveTextContent('ideally within 24 hours. It can be started up to 72 hours after.');
     expect(within(care).getByRole('link', { name: /1-800-656-4673/ })).toHaveAttribute('href', 'tel:+18006564673');
     await user.click(within(care).getByRole('button', { name: 'Keep going' }));
     expect(screen.getByLabelText('What you would like to share')).toBeInTheDocument();

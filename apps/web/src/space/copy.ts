@@ -37,7 +37,8 @@ export const COPY = {
 
   // Asked once, before she writes anything. Sources: NJ AG Directive 2024-02 (the NJ exam window); P.L.2024 c.59 and
   // NY DOH publication 1934 (a free exam, with or without a police report); CDC nPEP guidelines, 2025 (HIV medicine
-  // within 72 hours). No NY exam window is given because none is sourced yet.
+  // as soon as possible, ideally within 24 hours, no later than 72). No NY exam window is given because none is
+  // sourced yet.
   recent: {
     title: 'Did this happen in the last week or so?',
     lead: "You can skip this. Some care works best soon after, so we ask before you start. We don't keep your answer.",
@@ -49,7 +50,7 @@ export const COPY = {
     care: [
       'You can get medical care and a forensic exam without reporting to police. In New Jersey and New York, the exam is free.',
       'In New Jersey, an exam is usually possible up to 7 days after, sometimes longer.',
-      'Medicine to prevent HIV works best when it is started as soon as possible, ideally within 72 hours.',
+      'Medicine to prevent HIV works best when it is started as soon as possible, ideally within 24 hours. It can be started up to 72 hours after.',
       "You don't need to write anything here first.",
     ],
     keepGoing: 'Keep going',
