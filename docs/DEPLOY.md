@@ -22,14 +22,17 @@ the pilot setting.** Production requires it to be set, at build time and at run 
   `/api/escrow`, `/api/counselor`, `/api/report-requests` and `/api/report-releases` route, and refuses counselor
   sign-ups. It **refuses to start** if any matching-only variable is set (`MATRA_OPRF_SHARE*`, `MATRA_OPRF_HOLDER_URLS`,
   `MATRA_HOLDER_TOKEN_KEY*`, `MATRA_MATCHER_URL`, `MATRA_MATCHER_KEY*`, `MATRA_MATCHER_TOKEN*`,
-  `MATRA_ATTESTATION_PLATFORM_KEY*`, `MATRA_PHONE_HASH_KEY*`), and a production server refuses to start over a database
+  `MATRA_ATTESTATION_PLATFORM_KEY*`, `MATRA_PHONE_HASH_KEY*`, `MATRA_SMS_*`, `TWILIO_*`, the retired
+  `MATRA_OPRF_KEY_A/B*`), and a production server refuses to start over a database
   that still holds sealed-match entries or report releases (development only warns; nothing is deleted). A web build
   that is off refuses the OPRF and matcher pins; it still needs `MATRA_COUNSELOR_ROSTER_PUBKEY`, which signs the attorney
   directory. The key holders and the matcher refuse to run with `MATRA_MATCHING=off`.
 - **On:** everything below about sealed matching applies. The demo stack (`npm run demo`, `compose.yaml`, the Render
   Blueprint) runs on.
 
-Outside production the default is off.
+Outside production the default is off. The build records its mode in `apps/web/dist/matra-build.json`; the server
+refuses to serve a build made with the other value, and `npm run build`'s audit reads the mode from that file (never
+from its own environment). The Docker image's runtime defaults to the value it was built with.
 
 When `NODE_ENV=production`:
 
@@ -92,6 +95,7 @@ The pilot build and server, with sealed matching off (no OPRF keys, no phone key
 
 ```sh
 MATRA_MATCHING=off MATRA_COUNSELOR_ROSTER_PUBKEY=… npm run build    # the build audit checks no matching code shipped
+# then sign the attorney directory with the org key (steps 4–5 under "Sealed matching: keys, pins…"), or nobody can share
 NODE_ENV=production MATRA_MATCHING=off MATRA_PEPPER=$(openssl rand -hex 32) MATRA_DB_PATH=/tmp/matra-pilot/matra.db npm start
 npm run e2e:pilot     # the pilot path in a browser: no matching question or call; share still works
 ```
@@ -160,7 +164,10 @@ deployer can configure it:
 
 ## Sealed matching: keys, pins and the counselor roster
 
-Only with `MATRA_MATCHING=on`. A pilot with matching off skips this section and the next one entirely.
+With `MATRA_MATCHING=off` (the pilot), skip steps 1–3 and 6 and the matcher section below, but **do steps 4 and 5**:
+the off build still needs the organization key (`MATRA_COUNSELOR_ROSTER_PUBKEY`), and a pinned build shares only with
+attorneys listed in the signed attorney directory. Skip step 5 and no attorney can be confirmed, so she can't share at
+all. With matching off the roster part of the signed lists is simply empty.
 
 1. **OPRF key ceremony (dealer).** Offline, on a machine nobody keeps: `npm run -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out <dir>`. It writes `oprf-share-<i>.key` (mode 0600) and prints `{ t, m, groupPublicKey, holders: [{ index, publicKey }] }`. Hand each share file to a **different** holder institution, then delete `<dir>`. The dealer briefly knew the whole key; a dealer-free DKG is future work (SECURITY_WHITEPAPER.md §4a).
 2. **Run the holders.**

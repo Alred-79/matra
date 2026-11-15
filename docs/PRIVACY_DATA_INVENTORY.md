@@ -92,9 +92,11 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 
 ### Sealed matching
 
-With `MATRA_MATCHING=off` (the pilot setting) none of these tables gets a row: the server writes nothing for matching,
-loads no phone key, and refuses counselor accounts (docs/DEPLOY.md). The tables still exist (one schema for both
-settings), empty. A production server set to off refuses to start over a database that still has matching rows.
+With `MATRA_MATCHING=off` (the pilot setting) matching writes nothing: the server loads no phone key, refuses counselor
+accounts, and none of these tables gets a row, except `matching_meta`, which then holds only the org-signed attorney
+directory and an empty signed counselor roster (written by `verify-attorney` / `sign-roster`; the pilot needs the
+directory to share). The tables still exist (one schema for both settings). A production server set to off refuses to
+start over a database that still has sealed-match entries or report releases.
 
 | Table | What / why | Retention |
 |---|---|---|
