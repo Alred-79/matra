@@ -520,7 +520,11 @@ export const AUDIT_LIST_LIMIT = 1000;
  * passphrase reset with it (W20), a passphrase change, and her other sessions being signed out. Each is capped or
  * rate-limited where it is written.
  */
-const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action IN ('auth.recovered', 'auth.passphrase_changed', 'auth.other_sessions_ended'))`;
+/** Wrong passphrases typed into a signed-in session (re-authentication), by what was being attempted. */
+const REAUTH_FAILED_ACTIONS = ['auth.reauth_failed', 'auth.delete_reauth_failed', 'auth.passphrase_reauth_failed', 'auth.sessions_reauth_failed'];
+/** At most this many of those rows per account per UTC day (all four together). */
+export const REAUTH_FAILED_AUDIT_CAP = 10;
+const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action IN ('auth.recovered', 'auth.passphrase_changed', 'auth.other_sessions_ended', ${REAUTH_FAILED_ACTIONS.map((a) => `'${a}'`).join(', ')}))`;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -813,6 +817,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.status(201).json({ token, user: toPublicUser(q.userById.get(id) as UserRow) });
   });
 
+  const credentialsUnchanged = db.prepare('SELECT 1 FROM users WHERE id = ? AND auth_hash = ?');
   app.post('/api/auth/login', async (req, res) => {
     rateLimit(req, 'login', req.body?.username);
     const body = parse(S.loginRequest, req.body);
@@ -828,7 +833,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (n < LOGIN_FAILED_AUDIT_CAP) audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
-    const token = createSession(db, u.id);
+    // Only if her passphrase is still the one just checked: a sign-in with the old passphrase that was in flight while
+    // she changed it (or reset it) must not outlive the change, which has already signed out every other session.
+    const token = db.transaction(() => (credentialsUnchanged.get(u.id, u.auth_hash) ? createSession(db, u.id) : null))();
+    if (!token) throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     audit(u.id, 'auth.login', 'Signed in');
     res.json({ token, user: toPublicUser(u) });
   });
@@ -866,12 +874,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
    * Re-authenticate with the passphrase auth key before changing what can open her account (a recovery code) or
    * deleting it. A session alone is not enough: a session can be left open on a shared device.
    */
-  const reauth = async (u: UserRow, authKey: string, purpose: 'recovery' | 'delete' | 'passphrase' | 'sessions' = 'recovery') => {
+  /** Her passphrase (or key version) changed between reading her row and writing it: nothing was changed here. */
+  const passphraseChanged = () =>
+    new HttpError(409, 'passphrase_changed', 'Your passphrase was changed somewhere else just now, so nothing was changed here.');
+  const REAUTH_FAILED = {
+    recovery: ['auth.reauth_failed', 'A recovery-code change with an incorrect passphrase'],
+    delete: ['auth.delete_reauth_failed', 'An attempt to delete the account with an incorrect passphrase'],
+    passphrase: ['auth.passphrase_reauth_failed', 'A passphrase change with an incorrect passphrase'],
+    sessions: ['auth.sessions_reauth_failed', 'An attempt to sign out other sessions with an incorrect passphrase'],
+  } as const;
+  const reauthFailedSince = db.prepare(
+    `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action IN (${REAUTH_FAILED_ACTIONS.map(() => '?').join(', ')}) AND at >= ?`,
+  );
+  const reauth = async (u: UserRow, authKey: string, purpose: keyof typeof REAUTH_FAILED = 'recovery') => {
     if (!(await verifyAuthKey(authKey, u.auth_salt, u.auth_hash))) {
-      if (purpose === 'delete') audit(u.id, 'auth.delete_reauth_failed', 'An attempt to delete the account with an incorrect passphrase');
-      else if (purpose === 'passphrase') audit(u.id, 'auth.passphrase_reauth_failed', 'A passphrase change with an incorrect passphrase');
-      else if (purpose === 'sessions') audit(u.id, 'auth.sessions_reauth_failed', 'An attempt to sign out other sessions with an incorrect passphrase');
-      else audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
+      // Someone holding her open session is guessing: always listed in her activity, capped per UTC day so it can't flood it.
+      const { n } = reauthFailedSince.get(u.id, ...REAUTH_FAILED_ACTIONS, new Date().toISOString().slice(0, 10)) as { n: number };
+      if (n < REAUTH_FAILED_AUDIT_CAP) audit(u.id, REAUTH_FAILED[purpose][0], REAUTH_FAILED[purpose][1]);
       throw new HttpError(401, 'invalid_credentials', 'That passphrase is incorrect.');
     }
   };
@@ -889,10 +908,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const { hash, salt } = await hashAuthKey(body.recoveryAuthKey);
     const replacing = u.recovery_auth_hash != null;
     db.transaction(() => {
-      db.prepare(
+      // Conditional on the passphrase she just proved (and the key version that was read with it): a passphrase change
+      // that committed during the scrypt above must not be overwritten with a wrap under the old passphrase.
+      const r = db.prepare(
         `UPDATE users SET key_version = 2, wrapped_account_key = COALESCE(?, wrapped_account_key),
-                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ? WHERE id = ?`,
-      ).run(body.wrappedAccountKey ? canonicalEnvelope(body.wrappedAccountKey) : null, hash, salt, canonicalEnvelope(body.recoveryWrappedKey), u.id);
+                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ?
+          WHERE id = ? AND auth_hash = ? AND key_version = ?`,
+      ).run(body.wrappedAccountKey ? canonicalEnvelope(body.wrappedAccountKey) : null, hash, salt, canonicalEnvelope(body.recoveryWrappedKey), u.id, u.auth_hash, u.key_version);
+      if (r.changes !== 1) throw passphraseChanged();
       // a reset started with the old code must not finish with it
       for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
       audit(u.id, replacing ? 'recovery.replaced' : 'recovery.set_up', replacing ? 'Made a new recovery code (the old one stopped working)' : 'Set up a recovery code');
@@ -906,7 +929,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const u = q.userById.get(req.user!.id) as UserRow;
     await reauth(u, body.authKey);
     db.transaction(() => {
-      db.prepare('UPDATE users SET recovery_auth_hash = NULL, recovery_auth_salt = NULL, recovery_wrapped_key = NULL WHERE id = ?').run(u.id);
+      const r = db
+        .prepare('UPDATE users SET recovery_auth_hash = NULL, recovery_auth_salt = NULL, recovery_wrapped_key = NULL WHERE id = ? AND auth_hash = ?')
+        .run(u.id, u.auth_hash);
+      if (r.changes !== 1) throw passphraseChanged();
       for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
       audit(u.id, 'recovery.turned_off', 'Turned off the recovery code');
     })();
@@ -946,8 +972,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       audit(u.id, 'auth.passphrase_changed', 'You changed your passphrase; every other session was signed out');
       return true;
     })();
-    if (!changed)
-      throw new HttpError(409, 'passphrase_changed', 'Your passphrase was changed somewhere else just now, so nothing was changed here.');
+    if (!changed) throw passphraseChanged();
     res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow), endedSessions });
   });
 

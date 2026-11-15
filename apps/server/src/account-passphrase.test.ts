@@ -27,7 +27,7 @@ import { getDb } from './app.js';
 import { createRecord, makeApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
 
 // Run something while the server hashes the new auth key (the conditional-update race).
-const hook = vi.hoisted(() => ({ duringHash: null as null | (() => Promise<void>) }));
+const hook = vi.hoisted(() => ({ duringHash: null as null | (() => Promise<void>), duringVerify: null as null | (() => Promise<void>) }));
 vi.mock('./auth.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('./auth.js')>();
   return {
@@ -37,6 +37,13 @@ vi.mock('./auth.js', async (importOriginal) => {
       hook.duringHash = null;
       if (run) await run();
       return mod.hashAuthKey(k);
+    },
+    verifyAuthKey: async (k: string, salt: Buffer, expected: Buffer) => {
+      const ok = await mod.verifyAuthKey(k, salt, expected);
+      const run = hook.duringVerify;
+      hook.duringVerify = null;
+      if (run) await run();
+      return ok;
     },
   };
 });
@@ -315,5 +322,88 @@ describe('her sessions', () => {
     for (let i = 0; i < 12; i++) statuses.push((await request(app).post('/api/auth/sessions/revoke-others').set(jane.auth).send({ authKey: wrongKey })).status);
     expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
     expect(statuses.slice(10)).toEqual([429, 429]);
+  });
+});
+
+describe('races with a passphrase change (real server, real crypto)', () => {
+  /** Signs in and fully unlocks, as her client does: the passphrase must open her private key, not only authenticate. */
+  async function opens(app: express.Express, username: string, passphrase: string) {
+    const { res, pk } = await login(app, username, passphrase);
+    if (res.status !== 200) return `sign-in ${res.status}`;
+    try {
+      const { masterKey } = await unlockAccount(pk, res.body.user.wrappedAccountKey);
+      await unwrapPrivateKey(res.body.user.wrappedPrivateKey, masterKey);
+      return 'opens';
+    } catch {
+      return 'signs in but opens nothing';
+    }
+  }
+
+  it('a recovery-code set-up in flight when the passphrase changes is refused (409), and the new passphrase still opens her space', async () => {
+    const { app } = makeApp();
+    const jane = await registerUser(app, 'jane.rc-race'); // key version 1: set-up sends AS wrapped under the OLD passphrase
+    const pre = await prelogin(app, 'jane.rc-race');
+    const pk = await derivePassphraseKeys(jane.passphrase, pre.kdfSalt, pre.kdfIterations);
+    const as = await legacyAccountSecret(pk.ikm);
+    const rk = await deriveRecoveryKeys(generateRecoveryCode().bytes);
+    const setUp = { authKey: pk.authKey, wrappedAccountKey: await wrapAccountSecret(as, pk.kek), recoveryAuthKey: rk.authKey, recoveryWrappedKey: await wrapAccountSecret(as, rk.kek) };
+    as.fill(0);
+    const changed = await changeBody(app, jane);
+    // the change commits while the set-up route is hashing the recovery auth key, after it re-authenticated
+    hook.duringHash = async () => {
+      expect((await request(app).post('/api/account/passphrase').set(jane.auth).send(changed)).status).toBe(200);
+    };
+    const res = await request(app).post('/api/account/recovery').set(jane.auth).send(setUp);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('passphrase_changed');
+    expect(await opens(app, 'jane.rc-race', NEW_PASS)).toBe('opens');
+    expect(await opens(app, 'jane.rc-race', jane.passphrase)).toBe('sign-in 401');
+    expect((await request(app).get('/api/me').set(jane.auth)).body.user.hasRecoveryCode).toBe(false);
+  });
+
+  it('turning the recovery code off is conditional too', async () => {
+    const { app } = makeApp();
+    const jane = await registerUser(app, 'jane.off-race');
+    const code = await setUpRecovery(app, jane);
+    expect(code).toBeTruthy();
+    const off = { authKey: (await derivePassphraseKeys(jane.passphrase, (await prelogin(app, 'jane.off-race')).kdfSalt, TEST_ITERATIONS)).authKey };
+    const changed = await changeBody(app, jane);
+    hook.duringVerify = async () => {
+      expect((await request(app).post('/api/account/passphrase').set(jane.auth).send(changed)).status).toBe(200);
+    };
+    const res = await request(app).delete('/api/account/recovery').set(jane.auth).send(off);
+    expect(res.status).toBe(409);
+    expect((await request(app).get('/api/me').set(jane.auth)).body.user.hasRecoveryCode).toBe(true);
+  });
+
+  it('a sign-in with the old passphrase in flight during the change gets no session', async () => {
+    const { app, db } = makeApp();
+    const jane = await registerUser(app, 'jane.login-race');
+    const changed = await changeBody(app, jane);
+    const pre = await prelogin(app, 'jane.login-race');
+    const old = await derivePassphraseKeys(jane.passphrase, pre.kdfSalt, pre.kdfIterations);
+    const before = (db.prepare('SELECT COUNT(*) n FROM sessions WHERE user_id = ?').get(jane.user.id) as { n: number }).n;
+    // the old passphrase checks out, then the change commits before the session would be created
+    hook.duringVerify = async () => {
+      expect((await request(app).post('/api/account/passphrase').set(jane.auth).send(changed)).status).toBe(200);
+    };
+    const res = await request(app).post('/api/auth/login').send({ username: 'jane.login-race', authKey: old.authKey });
+    expect(res.status).toBe(401);
+    expect((db.prepare('SELECT COUNT(*) n FROM sessions WHERE user_id = ?').get(jane.user.id) as { n: number }).n).toBe(before);
+  });
+
+  it('wrong passphrases typed into her open session are always listed, at most 10 a day', async () => {
+    const { app, db } = makeApp();
+    const jane = await registerUser(app, 'jane.guess');
+    const wrong = { authKey: (await derivePassphraseKeys('not-her-passphrase', (await prelogin(app, 'jane.guess')).kdfSalt, TEST_ITERATIONS)).authKey };
+    for (let i = 0; i < 6; i++) await request(app).post('/api/auth/sessions/revoke-others').set(jane.auth).send(wrong);
+    for (let i = 0; i < 6; i++) await request(app).delete('/api/account/recovery').set(jane.auth).send(wrong);
+    const rows = (db.prepare(`SELECT action FROM audit_events WHERE user_id = ? AND action LIKE 'auth.%reauth_failed'`).all(jane.user.id) as Array<{ action: string }>).length;
+    expect(rows).toBe(10);
+    // flood the list with other rows: the failures are still returned
+    const ins = db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)');
+    for (let i = 0; i < 1100; i++) ins.run(`f${i}`, jane.user.id, 'record.created', null, new Date(Date.now() + 60_000 + i).toISOString());
+    const listed = await activity(app, jane.auth);
+    expect(listed.filter((a) => a.endsWith('reauth_failed'))).toHaveLength(10);
   });
 });

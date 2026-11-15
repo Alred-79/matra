@@ -9,7 +9,7 @@ import { fakeAuthFetch } from '../test/fakeServer';
 import { Harness, current } from '../test/sessionHarness';
 import { ChangePassphrase } from './ChangePassphrase';
 
-const PASS = 'acorn-maple-violin-otter-quartz-heron';
+const PASS = 'acorn-otter-river-lilac-tulip-zebra';
 
 function Gate() {
   return useSession().session ? <ChangePassphrase /> : <p>Signed out</p>;

@@ -26,7 +26,7 @@ describe('My story fails closed', () => {
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-story', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-story', passphrase: 'acorn-otter-river-lilac-tulip-zebra', role: 'survivor', ageConfirmed18: true });
     });
     const mk = current!.session!.masterKey;
     stored.push(await storedRecord(mk, { kind: 'draft', draft: emptyDraft(), savedAt: '2026-08-19T00:00:00Z' }, { id: 'r1' }));
@@ -68,7 +68,7 @@ describe('My story fails closed', () => {
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-lost', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-lost', passphrase: 'acorn-otter-river-lilac-tulip-zebra', role: 'survivor', ageConfirmed18: true });
     });
     const mk = current!.session!.masterKey;
     const draft = { ...emptyDraft(), entries: [{ id: 'e1', createdAt: '2026-08-19T00:00:00Z', text: 'Her words, still here.', source: 'typed' as const }] };
@@ -102,7 +102,7 @@ describe('My story fails closed', () => {
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-baddraft', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-baddraft', passphrase: 'acorn-otter-river-lilac-tulip-zebra', role: 'survivor', ageConfirmed18: true });
     });
     rerender(
       <Harness fetchImpl={fetchImpl as unknown as typeof fetch}>

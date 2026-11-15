@@ -34,8 +34,8 @@ describe('CreateAccountForm (survivor) — 18+ gate', () => {
       </SessionProvider>,
     );
     await user.type(screen.getByLabelText(/Choose an alias/), 'wren-77');
-    await user.type(screen.getByLabelText('Passphrase'), 'pebble lantern fjord mango heron willow');
-    await user.type(screen.getByLabelText('Type it again'), 'pebble lantern fjord mango heron willow');
+    await user.type(screen.getByLabelText('Passphrase'), 'pebble lantern fjord mango heron willow copper tundra violin saffron');
+    await user.type(screen.getByLabelText('Type it again'), 'pebble lantern fjord mango heron willow copper tundra violin saffron');
     await user.click(screen.getByLabelText(/written my passphrase down/));
     const create = screen.getByRole('button', { name: 'Create my private space' });
     expect(create).toBeDisabled();
@@ -85,7 +85,8 @@ describe('CreateAccountForm — passphrases (PR 7)', () => {
   it('survivor: suggests six random words; weak phrases keep the button off', async () => {
     const user = userEvent.setup();
     renderForm('survivor');
-    expect(screen.getByText(/^Six random words are easier to remember/)).toBeInTheDocument();
+    expect(screen.getByText(/^Six random words made on your device are the safest choice/)).toBeInTheDocument();
+    expect(screen.getByTestId('wordlist-credit')).toHaveTextContent(/EFF Short Wordlist #1.*CC BY 4\.0/);
     await user.type(screen.getByLabelText(/Choose an alias/), 'wren-77');
     await user.click(screen.getByLabelText(/written my passphrase down/));
     await user.click(screen.getByLabelText('I am 18 or older.'));

@@ -31,6 +31,7 @@ const ALLOWED_HOSTS = {
   'online.rainn.org': 'a link the survivor can choose to follow (RAINN online hotline)',
   'www.google.com': 'quick exit navigates the tab away to a neutral site (a navigation the survivor chose, not a request from the app)',
   'www.njoag.gov': 'links to the NJ VCCO application forms',
+  'creativecommons.org': 'the CC BY 4.0 licence link in the passphrase word-list credit (NOTICE; a link she can choose to follow)',
   'huggingface.co': 'transformers.js default model host; disabled (env.allowRemoteModels = false, remoteHost overridden; CSP connect-src self)',
   'cdn.jsdelivr.net': 'ONNX Runtime default wasm path; overridden to /models/ort/ (apps/web/src/voice/worker.ts; CSP script-src self)',
   'react.dev': 'React error-message text',

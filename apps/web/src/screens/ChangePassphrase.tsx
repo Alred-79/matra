@@ -45,7 +45,11 @@ export function ChangePassphrase() {
       setFieldsKey((k) => k + 1);
       setDone(
         'Your passphrase is changed. Use the new one from now on.' +
-          (endedSessions ? ` ${plural(endedSessions, 'other session')} ${endedSessions === 1 ? 'was' : 'were'} signed out.` : ''),
+          (endedSessions === null
+            ? ' Any other session was signed out.'
+            : endedSessions
+              ? ` ${plural(endedSessions, 'other session')} ${endedSessions === 1 ? 'was' : 'were'} signed out.`
+              : ''),
       );
       void sessions.reload();
     } catch (err) {
@@ -117,7 +121,7 @@ export function ChangePassphrase() {
         <div className="card warn stack" role="note" data-testid="change-caveat">
           <p style={{ margin: 0 }}>
             <strong>What changing it does:</strong> your old passphrase stops working for signing in, and anyone signed in
-            to your account on another device is signed out.
+            to your account on another device is signed out. Anything typed there and not yet saved is lost.
           </p>
           <p style={{ margin: 0 }}>
             <strong>What it can’t do:</strong> if someone already had your old passphrase, or had your account open, they

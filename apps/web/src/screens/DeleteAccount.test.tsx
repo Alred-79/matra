@@ -12,7 +12,7 @@ function Home() {
   return <p>Public home{(loc.state as { deleted?: boolean } | null)?.deleted ? ' — deleted' : ''}</p>;
 }
 
-const PASS = 'acorn-maple-violin-otter-quartz-heron';
+const PASS = 'acorn-otter-river-lilac-tulip-zebra';
 
 async function setup(opts: { deleteFails?: boolean; holdDelete?: Promise<void> } = {}) {
   const user = userEvent.setup();

@@ -18,7 +18,7 @@ const WORD_NAMES: Record<number, string> = { 6: 'Six', 7: 'Seven' };
  * can be used, else null.
  *
  * Survivors: a suggestion of six random words made on this device, which she can use, or her own, which must reach the
- * meter's "strong" (an estimated 60 bits). Attorneys and counselors: seven random words made here, and only those
+ * meter's "strong" (a harsh score, with no bit claim, and copy saying the suggestion is safer). Attorneys and counselors: seven random words made here, and only those
  * (they can ask for different words, not type their own); typing it again is how they show they copied it.
  */
 export function NewPassphraseFields({
@@ -40,13 +40,17 @@ export function NewPassphraseFields({
   const words = passphraseWords(role);
   const choose = canChoosePassphrase(role);
   const [suggestion, setSuggestion] = useState(() => generatePassphrase(words));
+  // every suggestion shown here: only those count as generated (six list words she typed herself are not random)
+  const [shown] = useState(() => new Set<string>());
+  shown.add(suggestion);
   const [pass, setPass] = useState('');
   const [confirm, setConfirm] = useState('');
   const [show, setShow] = useState(false);
-  const strength = passphraseStrength(pass, context);
+  const meter = { generatedHere: shown.has(pass) };
+  const strength = passphraseStrength(pass, context, meter);
   const value = choose ? pass : suggestion;
   const mismatch = confirm.length > 0 && confirm !== value;
-  const accepted = confirm === value && (choose ? passphraseAccepted(pass, context) : true) ? value : null;
+  const accepted = confirm === value && (choose ? passphraseAccepted(pass, context, meter) : true) ? value : null;
 
   useEffect(() => onChange(accepted), [accepted, onChange]);
 
@@ -90,6 +94,7 @@ export function NewPassphraseFields({
             Attorney and counselor accounts always use words made here, never ones you choose, because your account opens
             what survivors share with you. Type it again below, exactly as shown, dashes included.
           </p>
+          <WordListCredit />
         </div>
         {againField}
         {mismatch && <p className="error">These don’t match yet.</p>}
@@ -124,6 +129,7 @@ export function NewPassphraseFields({
             Suggest another
           </button>
         </div>
+        <WordListCredit />
       </div>
       <label className="field">
         <span>{label}</span>
@@ -142,7 +148,9 @@ export function NewPassphraseFields({
         <span style={{ width: pass ? STRENGTH_WIDTH[strength.level] : '0%' }} />
       </div>
       <p id="new-passphrase-strength" className="small muted" aria-live="polite" data-testid="passphrase-strength">
-        {pass ? strength.message : `${WORD_NAMES[words]} random words are easier to remember, and harder to guess, than a short password.`}
+        {pass
+          ? strength.message
+          : `${WORD_NAMES[words]} random words made on your device are the safest choice. A phrase you make up yourself is easier to guess, so it has to be longer.`}
       </p>
       {againField}
       {mismatch && <p className="error">These don’t match yet.</p>}
@@ -151,5 +159,18 @@ export function NewPassphraseFields({
         <span>Show passphrase</span>
       </label>
     </>
+  );
+}
+
+/** CC BY 4.0 attribution for the word list (NOTICE), shown wherever its words are. */
+export function WordListCredit() {
+  return (
+    <p className="small muted" style={{ margin: 0 }} data-testid="wordlist-credit">
+      Words from the EFF Short Wordlist #1 (Electronic Frontier Foundation), shortened by Matra;{' '}
+      <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">
+        CC BY 4.0
+      </a>
+      .
+    </p>
   );
 }
