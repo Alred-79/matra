@@ -224,7 +224,7 @@ individual donors, 5% "program support"**.
    stretched from the **identifier itself**: Argon2 or PBKDF2 with a per-record random salt, then
    NaCl SecretBox, then a server "pepper" SecretBox. To match, the server **trial-decrypted every
    MatchReport** with each newly submitted identifier, so the server saw plaintext identifiers at
-   submission. Matra's current design (client PBKDF2 plus server HMAC pepper) is roughly at this level.
+   submission. Matra's design as of 2026-10-07 (client PBKDF2 plus server HMAC pepper) was roughly at this level; it has since been replaced by a threshold OPRF.
 2. **2018 design (P1): OPRF, key federation, and Shamir sharing.** Described below. It was built by BU
    SAIL. A demo (crypto-demo, TypeScript) replaces the OPRF with `SHA512(PerpID ‖ k_demo)`.
 3. **Vault (2020–2026).** P2 says Callisto's production code is TypeScript and that account recovery

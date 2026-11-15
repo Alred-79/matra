@@ -129,7 +129,7 @@ in the browser before it is saved.
 **The access log, then revoke.** Back in Profile A, open Jane's activity log: *"Demo — Alex Rivera, Esq. opened your
 shared case file at …"*. Then **revoke** the share and refresh Profile B to show access denied.
 
-- *"She sees every time you open or download it. Revoking stops future access. It can't take back what you already
+- *"She sees every time you open or download it. Revoking stops future access, and we delete your copy of the key from our database. It can't take back what you already
   downloaded, which is why the partner MOU has deletion duties."*
 - Sign out of `attorney.nj1`.
 
@@ -191,8 +191,8 @@ demo-only."*
 | Her contact details for the counselor (sealed to the counselor) | Routing states, which only the separate matcher can read |
 | Her passphrase or recovery code | Rate-limit keys that are hashed and expire daily. No IP addresses are stored. |
 
-- *"So 'subpoena-proof' is wrong, and we never say it. Matra, as the operator, can't produce her content because it
-  can't decrypt it. She can be ordered to produce it, and so can anyone she shares with. Anything she gives police is
+- *"So 'subpoena-proof' is wrong, and we never say it. Matra, as the operator, holds no plaintext of her content, because it
+  can't decrypt what it stores. She can be ordered to produce it, and so can anyone she shares with. Anything she gives police is
   discoverable. We tell her that in plain words before she starts, before she seals, and before she shares."*
 - *"Two honest limits. First, this assumes the web code we serve hasn't been tampered with. Second, in this test
   version the people who run Matra could check whether a particular identifier was sealed. Before real use, the key
@@ -260,9 +260,9 @@ and New York, and a pilot partner with trained advocates."*
 
 | Stage | What happens | Her consent | What she's told |
 |---|---|---|---|
-| Writing | Encrypted on her device and saved | None needed: nothing readable leaves the device | Matra can't read it, but a court can order **her** to hand it over |
+| Writing | Encrypted on her device and saved | None needed: nothing readable leaves the device | Matra's server can't read it (if the code we serve is untampered), but a court can order **her** to hand it over |
 | Sealing | This version is locked, and its hash goes on the ledger | She taps **Seal** | Every sealed version is kept |
-| Sharing with an attorney | The record key is re-encrypted to one verified attorney she picks | Scope, expiry, key fingerprint and consent text, word for word | She sees every access. Revoking stops future access but can't recall downloads |
+| Sharing with an attorney | The key to her sealed version is re-wrapped, on her device, to one verified attorney she picks | What the whole written account holds, the files she ticks, expiry, the label the attorney will see and the consent text, word for word | She sees every access. Revoking stops future access but can't recall downloads |
 | Sealed match | Her identifier is sealed. A routing state is sealed to the matcher | A separate opt-in, plus a safe contact method | She'll never see a match. A counselor, a licensed attorney, may contact her once |
 | Counselor, stage 1 | The counselor sees the identifier, states and contact methods, then contact details after a conflict check | Covered by her opt-in | The counselor reaches out once, privately, by the method she chose |
 | Counselor, stage 2 | Her full report goes to that counselor only | A new, separate **yes** for each request, after the counselor has spoken with her | Not shared with anyone else who named the same person. A no is final for this match |

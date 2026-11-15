@@ -150,7 +150,7 @@ export async function lodgeEscrow(
     mirror(
       'Sealed match: the person she named',
       `${t.id.canonical} · happened in ${record.incident.jurisdiction?.state ?? '(no state)'} · she lives in ${record.survivor.residenceState ?? '(no state)'} · contact by ${contact.methods.join(', ')}`,
-      'Blinded here: each key holder gets a random-looking group element, the app server a tag it cannot reverse. The two states are sealed to the attested matcher only; her contact details to the counselors on the signed roster.',
+      'Blinded here: each key holder gets a random-looking group element, the app server a tag it cannot reverse. The two states are sealed to the matcher’s key only (its attestation is simulated in this demo); her contact details to the counselors on the signed roster.',
     );
     try {
       await submitMatchEntry(transport, {

@@ -20,6 +20,8 @@ any log output. **No third-party requests:** the web app loads everything from i
 'self'`, no analytics, no CDN, no web fonts from elsewhere); `npm run build` runs `scripts/audit-web-build.mjs`, and
 every e2e test fails on a request to another origin.
 
+**What this inventory cannot rule out.** It describes what the code we publish keeps. The operator also serves the web app's code, so a modified app could send a passphrase or plaintext to the server, and the server could then keep it (threat model W4); nothing yet lets a survivor check the code she was served.
+
 **Outside our code.** The hosting provider's edge / load balancer and the SMS provider keep their own records (e.g.
 access logs with IPs; the number and time of each verification). Turning IP logging off at the edge is a deployment
 step ([DEPLOY.md](DEPLOY.md)); this code cannot enforce it.
@@ -95,7 +97,7 @@ Changing her passphrase, or "sign out everywhere else", deletes her other rows a
 ### audit_events
 | Column | What / why | Retention |
 |---|---|---|
-| user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device. Failed sign-ins and wrong recovery codes are capped at 10 rows each per UTC day | account |
+| user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device. Failed sign-ins and wrong recovery codes are capped at 10 rows each per UTC day, and wrong passphrases on re-authentication (recovery-code changes, delete, change passphrase, sign out other devices) at 10 a day together. A passphrase change (`auth.passphrase_changed`), ending her other sessions (`auth.other_sessions_ended`) and a recovery-code start are always listed | account |
 
 ### Sealed matching
 

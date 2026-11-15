@@ -103,7 +103,7 @@ authorities, Q-039). The plan below prepares so that whatever counsel decides ca
 ## 8. Talking to survivors
 
 - Plain words, short, no blame, no jargon. Say what was exposed and what was not, in her terms ("someone copied our
-  database; your story stayed encrypted, and we can't read it either").
+  database; your story stayed encrypted, and the copy we hold can't be read from it"). Don't say "we can't read it" about a leak of the server's code: a modified app could capture a passphrase (threat model W4).
 - Say what she can do and whether she needs to do anything (for example change a weak passphrase).
 - Never send anything to a channel that could be seen by someone else on her device or account without her choosing it;
   remember her abuser may share the device (W8).
