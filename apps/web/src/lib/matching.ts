@@ -22,7 +22,7 @@ import { mirror } from '../dev/mirror';
 import { MATCHING_CONSENT_LINES } from './disclosures';
 import { useRequiredSession } from './session';
 import * as vault from './vault';
-import { UnreadableDraftError, loadDraftSlot, updateDraftSlot } from './draftSlot';
+import { updateDraftSlot } from './draftSlot';
 
 const ESCROW_KIND_LABEL: Record<string, string> = {
   email: 'email',
@@ -252,11 +252,9 @@ export async function lodgeMatches(
  * an identifier. Returns how many identifiers were newly sealed.
  */
 export async function retrySealedMatches(api: MatchingApiClient, masterKey: CryptoKey): Promise<number> {
-  const [opened, slot] = await Promise.all([vault.loadVault(api, masterKey, { withLedger: false }), loadDraftSlot(api, masterKey)]);
-  // Some saved versions couldn't be opened: the "latest" sealed one here may be older than hers, and matching from it
-  // could seal what she has since taken out. Do nothing; the caller shows that it couldn't be set up right now.
-  if (opened.unreadable > 0) throw new vault.UnreadableVaultError(opened.unreadable);
-  if (slot.unreadable) throw new UnreadableDraftError();
+  // Fails closed (lib/vault.ts loadSpace): if anything didn't load, the "latest" sealed version here may be older than
+  // hers, and matching from it could seal what she has since taken out. Do nothing; the caller shows why.
+  const { vault: opened, slot } = await vault.loadSpace(api, masterKey, { withLedger: false });
   const resume = vault.resumeFrom(slot.slot, opened);
   const record = resume.final?.payload.record;
   const before = resume.escrowedHashes;

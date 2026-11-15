@@ -4,11 +4,11 @@ import { checkAttorneyKey, wrapKeyForRecipient, type AttorneyKeyCheck } from '@m
 import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
-import { UnreadableNote } from '../components/UnreadableNote';
+import { VaultStopped } from '../components/UnreadableNote';
 import { NOTICES } from '../lib/disclosures';
 import { shareLengthSentence } from '../lib/shareTerms';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadVault, type OpenedRecord } from '../lib/vault';
+import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadSpace, type OpenedRecord } from '../lib/vault';
 import { MATCH_PINS, attorneyShareable } from '../matchPins';
 
 type Scope = ShareT['scope'][number];
@@ -118,7 +118,10 @@ function AttorneyCard({ a, check, onChoose }: { a: AttorneyProfile; check: Attor
 
 export function Share() {
   const { api, session } = useRequiredSession();
-  const vault = useAsync(() => loadVault(api, session.masterKey), [api, session.masterKey]);
+  // Fails closed (lib/vault.ts loadSpace): only a space that loaded cleanly is offered for sharing, so she never shares
+  // an older version than her newest without knowing. Her draft is checked too: if it says it became a sealed version
+  // the server didn't list, the server is hiding her newest seal.
+  const vault = useAsync(() => loadSpace(api, session.masterKey).then((s) => s.vault), [api, session.masterKey]);
   const current = finals(vault.data ?? []).find((r) => !r.supersededBy);
   const defaultState = current?.payload.record?.survivor.residenceState || current?.payload.record?.incident.jurisdiction.state || '';
   const [stateFilter, setStateFilter] = useState<string | null>(null);
@@ -162,7 +165,6 @@ export function Share() {
         record={current}
         attorney={attorney}
         check={chosen.check}
-        unreadable={vault.data?.unreadable ?? 0}
         onCancel={() => setChosen(null)}
         onDone={(at) => setDone({ attorney, at })}
       />
@@ -179,9 +181,7 @@ export function Share() {
         Legal help, on your terms
       </PageTitle>
       {vault.loading && <Loading label="Opening your space…" />}
-      {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
-      {/* before she picks anyone: the version offered here may not be her newest */}
-      <UnreadableNote count={vault.data?.unreadable} />
+      {vault.error && <VaultStopped error={vault.error} onRetry={() => void vault.reload()} />}
       {!vault.loading && !current && !vault.error && (
         <div className="card stack">
           <p>Once your story is sealed, you’ll be able to share it here — only if you want to.</p>
@@ -228,15 +228,12 @@ function Consent({
   record,
   attorney,
   check,
-  unreadable,
   onCancel,
   onDone,
 }: {
   record: OpenedRecord;
   attorney: AttorneyProfile;
   check: AttorneyKeyCheck;
-  /** saved versions that couldn't be opened: `record` may be older than her newest, so sharing stays off */
-  unreadable: number;
   onCancel(): void;
   onDone(at: string): void;
 }) {
@@ -268,7 +265,7 @@ function Consent({
     : '';
 
   async function share() {
-    if (!agreed || !keyOk || !fp || !statement || unreadable > 0 || legacy) return;
+    if (!agreed || !keyOk || !fp || !statement || legacy) return;
     setBusy(true);
     setError(null);
     try {
@@ -382,10 +379,9 @@ function Consent({
         </label>
         {busy && <Loading label="Locking your file for this attorney, on your device…" />}
         {error && <ErrorNote>{error}</ErrorNote>}
-        <UnreadableNote count={unreadable} />
         {legacy && <ErrorNote>{LEGACY_FINAL_NOTICE}</ErrorNote>}
         <div className="row">
-          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy || unreadable > 0 || legacy}>
+          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy || legacy}>
             Yes, share with {attorney.displayName}
           </button>
           <button className="btn" onClick={onCancel} disabled={busy}>

@@ -1,7 +1,7 @@
 import { draftToRecord, emptyDraft } from '../intake';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_KDF_ITERATIONS, deriveKeys, newKdfSalt } from '@matra/crypto';
-import type { ApiClient } from '../api/client';
+import { envelopeHash, type ApiClient } from '../api/client';
 import { getProfile, loadVault, saveProfile, sealPayload } from './vault';
 
 /** Minimal in-memory records API: stores exactly what the client sends, like the real server. */
@@ -15,7 +15,8 @@ function fakeRecordsApi() {
         id: `r${records.length + 1}`,
         ownerId: 'u1',
         supersedes: req.supersedes,
-        contentHash: 'h',
+        // like the real server: SHA-256 of the envelope (loadVault checks it)
+        contentHash: await envelopeHash(req.envelope),
         createdAt: new Date(Date.now() + records.length).toISOString(),
         ledgerEntryId: 'l',
         envelope: req.envelope,

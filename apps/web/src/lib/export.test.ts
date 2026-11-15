@@ -5,6 +5,7 @@ import type { BlobMeta, VaultRecord } from '@matra/shared';
 import { envelopeHash, type ApiClient } from '../api/client';
 import { MatchingApiClient } from '../api/matching';
 import { buildDataExport } from './export';
+import { storedRecord, vaultApi } from '../test/fakeVault';
 import { sampleRecord } from '../brief/fixtures';
 
 /** Pull every file out of a STORE zip (central directory walk). */
@@ -47,20 +48,16 @@ describe('buildDataExport', () => {
       ledgerEntryId: 'l2', ownerWrappedKey: await wrapKeyWithMaster(blobKey, masterKey),
     };
     const blobCt = await encryptBlob(photo, blobKey);
-    const recKey = await generateContentKey();
     const record = { ...sampleRecord, evidence: [{ ...sampleRecord.evidence[1], blobId: blob.id, sha256: photoSha, fileName: 'wrists.jpg' }] };
-    const envelope = await encryptJSON({ kind: 'final', record, savedAt: '2026-08-19T00:00:00Z' }, recKey);
-    const rec: VaultRecord = {
-      id: 'r'.repeat(32), ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
-      ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(recKey, masterKey),
-    };
+    const stored = await storedRecord(masterKey, { kind: 'final', record, savedAt: '2026-08-19T00:00:00Z' }, { id: 'r'.repeat(32), createdAt: '2026-08-19T00:00:00Z' });
+    const rec = stored.record;
     // her draft slot: what she is still adding to
     const slot = { name: await slotName(masterKey, 'draft'), ...(await sealSlot({ kind: 'draft', slotVersion: 1, draft: { answers: { 'about.name': 'Wren' } }, evidence: [], savedAt: '2026-09-01T00:00:00Z' }, masterKey)), version: '4'.repeat(32), updatedDay: '2026-09-01' };
     const fake = {
       listRecords: async () => ({ records: [rec] }),
       getRecord: async () => ({ record: rec }),
       getSlot: async () => ({ slot, draftMode: 'slot' }),
-      getLedgerEntry: async () => { throw new Error('offline'); },
+      getLedgerEntry: async () => ({ entry: stored.ledger }),
       listBlobs: async () => ({ blobs: [blob] }),
       downloadBlob: async () => blobCt,
       listEscrow: async () => ({ entries: [] }),
@@ -92,35 +89,38 @@ describe('buildDataExport', () => {
     expect(readme).toMatch(/draft\.json\s+Your current draft/);
   });
 
-  it('says in the manifest and the result when saved versions could not be opened (never a silently partial copy)', async () => {
+  it('says in the manifest and the result what is left out, and whether it couldn’t be fetched or didn’t match (never a silently partial copy)', async () => {
     g.__MATRA_MATCHING__ = false; // not about sealed matching; a plain client, as in a pilot build
     const { masterKey } = await deriveKeys('export test passphrase', newKdfSalt(), 1000);
-    const recKey = await generateContentKey();
-    const envelope = await encryptJSON({ kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, recKey);
-    const rec: VaultRecord = {
-      id: 'r'.repeat(32), ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
-      ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(recKey, masterKey),
-    };
-    const lost = { ...rec, id: 's'.repeat(32), createdAt: '2026-08-20T00:00:00Z' };
-    const api = {
-      listRecords: async () => ({ records: [rec, lost] }),
+    const ok = await storedRecord(masterKey, { kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, { id: 'r'.repeat(32) });
+    const lost = await storedRecord(masterKey, { kind: 'final', record: sampleRecord, savedAt: '2026-08-20T00:00:00Z' }, { id: 's'.repeat(32) });
+    const changed = await storedRecord(masterKey, { kind: 'final', record: sampleRecord, savedAt: '2026-08-21T00:00:00Z' }, { id: 't'.repeat(32) });
+    changed.record.contentHash = 'f'.repeat(64);
+    const api = vaultApi([ok, lost, changed]);
+    const get = api.getRecord.bind(api);
+    Object.assign(api, {
       getRecord: async (id: string) => {
-        if (id === lost.id) throw new Error('network');
-        return { record: rec };
+        if (id === lost.record.id) throw new Error('network');
+        return get(id);
       },
-      getLedgerEntry: async () => { throw new Error('offline'); },
-      getSlot: async () => ({ slot: null, draftMode: 'slot' }),
       listBlobs: async () => ({ blobs: [] }),
-      listEscrow: async () => ({ entries: [] }),
       listShares: async () => ({ shares: [] }),
       listAudit: async () => ({ events: [] }),
-    } as unknown as ApiClient;
+    });
 
     const out = await buildDataExport(api, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'));
-    expect(out).toMatchObject({ recordCount: 1, unreadableRecords: 1, problems: [] });
+    expect(out).toMatchObject({ recordCount: 1, unreadableRecords: 2, problems: [] });
     const files = unzip(out.zip);
     const manifest = JSON.parse(new TextDecoder().decode(files.get('evidence/manifest.json')));
-    expect(manifest.problems).toEqual(['1 saved version of your space could not be opened and is not in records.json']);
-    expect(JSON.parse(new TextDecoder().decode(files.get('records.json'))).unreadableRecords).toBe(1);
+    expect(manifest.problems).toEqual([
+      `Saved version ${'s'.repeat(32)} could not be fetched just now and is not in records.json`,
+      `Saved version ${'t'.repeat(32)} does not match its recorded fingerprint (SHA-256), so it is not in records.json`,
+    ]);
+    const records = JSON.parse(new TextDecoder().decode(files.get('records.json')));
+    expect(records.unreadableRecords).toBe(2);
+    expect(records.notIncluded).toEqual([
+      { kind: 'unavailable', id: 's'.repeat(32) },
+      { kind: 'integrity', reason: 'hash', id: 't'.repeat(32) },
+    ]);
   });
 });

@@ -43,8 +43,10 @@ export interface LoadedDraftSlot {
 export interface DraftSlotState {
   /** her draft slot, or null when she has none (or it didn't open: see `unreadable`) */
   slot: LoadedDraftSlot | null;
-  /** her slot is stored but didn't open: nothing may be saved over it unless she chooses to */
+  /** her slot is stored but didn't open: nothing is saved over it (lib/vault.ts loadSpace fails closed on it) */
   unreadable: boolean;
+  /** why it didn't open: it doesn't decrypt under her key, or it isn't a draft this app wrote */
+  unreadableReason?: 'gcm' | 'shape';
   /** the version a save must name (that of an unreadable slot too); null when she has no slot */
   version: string | null;
   draftMode: DraftMode;
@@ -109,18 +111,26 @@ export async function loadDraftSlot(api: ApiClient, masterKey: CryptoKey): Promi
   const res = await api.getSlot(await slotName(masterKey, DRAFT_SLOT));
   setDraftMode(res.draftMode);
   if (!res.slot) return { slot: null, unreadable: false, version: null, draftMode: res.draftMode };
+  const unreadable = (unreadableReason: 'gcm' | 'shape'): DraftSlotState => ({
+    slot: null,
+    unreadable: true,
+    unreadableReason,
+    version: res.slot!.version,
+    draftMode: res.draftMode,
+  });
+  let value: DraftSlot;
   try {
-    const value = await openSlot<DraftSlot>(res.slot, masterKey);
-    if (value?.kind !== 'draft' || !Array.isArray(value.evidence)) throw new Error('not a draft slot');
-    return {
-      slot: { value: forThisBuild(value), version: res.slot.version, updatedDay: res.slot.updatedDay },
-      unreadable: false,
-      version: res.slot.version,
-      draftMode: res.draftMode,
-    };
-  } catch {
-    return { slot: null, unreadable: true, version: res.slot.version, draftMode: res.draftMode };
+    value = await openSlot<DraftSlot>(res.slot, masterKey);
+  } catch (e) {
+    return unreadable(e instanceof SyntaxError ? 'shape' : 'gcm');
   }
+  if (value?.kind !== 'draft' || !Array.isArray(value.evidence) || typeof value.savedAt !== 'string') return unreadable('shape');
+  return {
+    slot: { value: forThisBuild(value), version: res.slot.version, updatedDay: res.slot.updatedDay },
+    unreadable: false,
+    version: res.slot.version,
+    draftMode: res.draftMode,
+  };
 }
 
 /**

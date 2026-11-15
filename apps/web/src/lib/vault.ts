@@ -16,7 +16,7 @@
  */
 import {
   decryptBlob,
-  decryptJSON,
+  decryptBytes,
   encryptBlob,
   encryptJSON,
   generateContentKey,
@@ -25,11 +25,11 @@ import {
   unwrapKeyWithMaster,
   wrapKeyWithMaster,
 } from '@matra/crypto';
-import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, VaultRecord } from '@matra/shared';
-import { envelopeHash, type ApiClient } from '../api/client';
+import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, VaultRecord, VaultRecordMeta } from '@matra/shared';
+import { ApiError, envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { stripMetadata } from './metadata';
-import { withoutMatchingAnswers, type LoadedDraftSlot } from './draftSlot';
+import { loadDraftSlot, withoutMatchingAnswers, type DraftSlotState, type LoadedDraftSlot } from './draftSlot';
 import type { WorkingData } from './session';
 import { mirror, typedText } from '../dev/mirror';
 
@@ -90,7 +90,10 @@ export interface OpenedRecord {
   meta: VaultRecord;
   payload: VaultPayload;
   key: CryptoKey;
-  /** recomputed envelope hash matches the server's contentHash (and the ledger's, if fetched) */
+  /**
+   * recomputed envelope hash matches the server's contentHash (and the ledger's, if fetched). Always true now: a record
+   * that doesn't match is never opened (loadVault fails closed, or leaves it out with `allowPartial`).
+   */
   verified: boolean;
   ledgerEntry?: LedgerEntry;
   supersededBy?: string;
@@ -110,70 +113,263 @@ export async function sealPayload(api: ApiClient, masterKey: CryptoKey, input: S
   return { ...res, key };
 }
 
-export async function openRecord(api: ApiClient, masterKey: CryptoKey, id: string, withLedger = true): Promise<OpenedRecord> {
-  const { record } = await api.getRecord(id);
-  const key = await unwrapKeyWithMaster(record.ownerWrappedKey, masterKey);
-  const payload = await decryptJSON<VaultPayload>(record.envelope, key);
-  const recomputed = await envelopeHash(record.envelope);
-  let ledgerEntry: LedgerEntry | undefined;
-  if (withLedger && record.ledgerEntryId) {
-    try {
-      ledgerEntry = (await api.getLedgerEntry(record.ledgerEntryId)).entry;
-    } catch {
-      /* ledger lookup optional */
-    }
+// ───────────── loading her space: fail closed ─────────────
+
+/**
+ * Why part of her space couldn't be used (PR 6, "loadVault fails closed"):
+ *   unavailable  a request didn't get through (network, server error): "couldn't reach us"
+ *   integrity    it came back but doesn't match what she saved: "doesn't match what you saved"
+ *     gcm          the record's key or ciphertext doesn't decrypt under her key (AES-GCM authentication failed)
+ *     hash         the envelope's SHA-256 differs from the content hash the server stored or listed
+ *     ledger       the ledger entry the record names is missing, or attests a different hash, subject or type
+ *     shape        it decrypts, but isn't a record (or draft) this app wrote
+ *   missing      something her space points to isn't served: a listed record the server won't return, a record a
+ *                listed one supersedes, or the sealed version her draft says it became. A cheap check for records the
+ *                server leaves out of the list; it can't see one nothing points to (that needs envelope v2's
+ *                per-account sequence, PR 4, as do the aad, commit and sig reasons).
+ */
+export type VaultProblemKind = 'unavailable' | 'integrity' | 'missing';
+export type IntegrityReason = 'gcm' | 'hash' | 'ledger' | 'shape';
+export interface VaultProblem {
+  kind: VaultProblemKind;
+  /** integrity only */
+  reason?: IntegrityReason;
+  /** the record id, 'list' (the list itself), or DRAFT_PROBLEM_ID (her draft slot) */
+  id: string;
+}
+export const DRAFT_PROBLEM_ID = 'draft';
+
+/**
+ * Her space didn't load cleanly, so nothing is shown as complete or saved on top of it. The message is the calm copy
+ * for the worst problem (friendlyError shows it as is). VaultIntegrityError and VaultUnavailableError say which.
+ */
+export class UnreadableVaultError extends Error {
+  readonly friendly = true;
+  constructor(
+    readonly problems: VaultProblem[],
+    message: string,
+  ) {
+    super(message);
+    this.name = 'UnreadableVaultError';
   }
-  const verified = recomputed === record.contentHash && (!ledgerEntry || ledgerEntry.contentHash === recomputed);
-  return { meta: record, payload, key, verified, ledgerEntry };
+  /** how many things didn't load */
+  get unreadable(): number {
+    return this.problems.length;
+  }
+}
+/** Something came back but doesn't match what she saved (integrity or missing). */
+export class VaultIntegrityError extends UnreadableVaultError {
+  constructor(problems: VaultProblem[]) {
+    super(problems, VAULT_INTEGRITY_STOP);
+    this.name = 'VaultIntegrityError';
+  }
+}
+/** A request didn't get through; trying again later may be all it takes. */
+export class VaultUnavailableError extends UnreadableVaultError {
+  constructor(problems: VaultProblem[]) {
+    super(problems, VAULT_UNAVAILABLE_STOP);
+    this.name = 'VaultUnavailableError';
+  }
+}
+
+/** Shown instead of a screen that would show or save from her space, when part of it didn't match what she saved. */
+export const VAULT_INTEGRITY_STOP =
+  'Something stored for your space doesn’t match what you saved, so we stopped here rather than show it or save over it. Nothing was changed. You could try again, or sign out and back in. If this keeps happening, Home still shows what did open, and you can download a copy of it there.';
+/** Shown instead of such a screen when part of her space couldn't be fetched. */
+export const VAULT_UNAVAILABLE_STOP =
+  'We couldn’t reach Matra to open all of your space just now, so we stopped here rather than show you something older than your newest save. Nothing was changed. Check your connection, then try again in a moment.';
+
+/** The error for these problems: integrity wins over unavailable, since trying again won't fix it. */
+export function vaultError(problems: VaultProblem[]): UnreadableVaultError {
+  return problems.some((p) => p.kind !== 'unavailable') ? new VaultIntegrityError(problems) : new VaultUnavailableError(problems);
 }
 
 /**
- * The opened records, newest first, plus how many saved versions could not be opened (fetch or decryption failed).
- * Those are still listed by the server; they are left out here, so whatever is "latest" may be an older version.
- * Screens that resume or summarize her space show `unreadable` with unreadableNotice.
+ * A banner for read-only screens that load with `allowPartial` (Home, Download my data): what is left out and why.
+ * Null when nothing is.
  */
-export type LoadedVault = OpenedRecord[] & { unreadable: number };
+export function vaultProblemNotice(problems: VaultProblem[] | undefined): string | null {
+  const ps = problems ?? [];
+  if (!ps.length) return null;
+  const versions = (list: VaultProblem[]) => list.filter((p) => p.id !== DRAFT_PROBLEM_ID).length;
+  const what = (list: VaultProblem[]) => {
+    const n = versions(list);
+    const draft = list.some((p) => p.id === DRAFT_PROBLEM_ID);
+    const v = n === 0 ? '' : n === 1 ? 'one saved version of your space' : `${n} saved versions of your space`;
+    return [v, draft ? 'your draft' : ''].filter(Boolean).join(' and ');
+  };
+  const bad = ps.filter((p) => p.kind !== 'unavailable');
+  const away = ps.filter((p) => p.kind === 'unavailable');
+  const parts: string[] = [];
+  if (bad.length) {
+    const many = versions(bad) + (bad.some((p) => p.id === DRAFT_PROBLEM_ID) ? 1 : 0) > 1;
+    parts.push(`${cap(what(bad))} ${many ? 'don’t' : 'doesn’t'} match what you saved, so ${many ? 'they are' : 'it is'} left out here. Nothing was changed.`);
+  }
+  if (away.length) parts.push(`We couldn’t reach Matra to open ${what(away)} just now.`);
+  parts.push('What you see here may not be your newest save. You could try again in a moment, or sign out and back in.');
+  return parts.join(' ');
+}
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** A failed request, as a problem. A signed-out session (401) isn't one: it is thrown as it is. */
+function requestProblem(e: unknown, id: string): VaultProblem {
+  if (e instanceof ApiError) {
+    if (e.status === 401) throw e;
+    // the server listed (or pointed to) it, then won't serve it
+    if (e.status === 404 || e.status === 403) return { kind: 'missing', id };
+  }
+  return { kind: 'unavailable', id };
+}
+
+const PAYLOAD_KINDS = new Set(['draft', 'final', 'profile']);
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** A payload this app (or an earlier version of it) wrote. */
+function isVaultPayload(p: unknown): p is VaultPayload {
+  if (!isObject(p) || typeof p.kind !== 'string' || !PAYLOAD_KINDS.has(p.kind) || typeof p.savedAt !== 'string') return false;
+  if (p.kind === 'final') return isObject(p.record);
+  if (p.kind === 'profile') return isObject(p.profile);
+  // a legacy draft record, or (MATRA_DRAFT_MODE=keep-versions) a draft slot kept as a record
+  return isObject(p.draft) || Array.isArray(p.evidence);
+}
 
 /**
- * Load and decrypt every record in the vault, newest first, marking superseded versions.
- * Profile (preferences) records are left out unless `includeProfile` is set. A record that fails to open is counted in
- * `unreadable` (never dropped silently): she must not resume from an older version without being told.
+ * Fetch, decrypt and check one record: the envelope opens under her key, it is a payload this app wrote, its hash is
+ * the one the server listed and stored, and (withLedger) the ledger entry it names attests that hash for this record.
+ */
+async function checkRecord(api: ApiClient, masterKey: CryptoKey, listed: VaultRecordMeta, withLedger: boolean): Promise<OpenedRecord | VaultProblem> {
+  const id = listed.id;
+  const integrity = (reason: IntegrityReason): VaultProblem => ({ kind: 'integrity', reason, id });
+  let record: VaultRecord;
+  try {
+    record = (await api.getRecord(id)).record;
+  } catch (e) {
+    return requestProblem(e, id);
+  }
+  if (!isObject(record) || record.id !== id || !isObject(record.envelope) || !isObject(record.ownerWrappedKey)) return integrity('shape');
+  let bytes: Uint8Array;
+  let key: CryptoKey;
+  try {
+    key = await unwrapKeyWithMaster(record.ownerWrappedKey, masterKey);
+    bytes = await decryptBytes(record.envelope, key);
+  } catch {
+    return integrity('gcm');
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return integrity('shape');
+  }
+  if (!isVaultPayload(payload)) return integrity('shape');
+  const recomputed = await envelopeHash(record.envelope);
+  if (recomputed !== record.contentHash || recomputed !== listed.contentHash) return integrity('hash');
+  let ledgerEntry: LedgerEntry | undefined;
+  if (withLedger) {
+    try {
+      ledgerEntry = (await api.getLedgerEntry(record.ledgerEntryId)).entry;
+    } catch (e) {
+      const p = requestProblem(e, id);
+      return p.kind === 'missing' ? integrity('ledger') : p;
+    }
+    if (!ledgerEntry || ledgerEntry.contentHash !== recomputed || ledgerEntry.subjectId !== id || ledgerEntry.type !== 'record.sealed')
+      return integrity('ledger');
+  }
+  return { meta: record, payload, key, verified: true, ledgerEntry };
+}
+
+const isProblem = (x: OpenedRecord | VaultProblem): x is VaultProblem => 'kind' in x && !('payload' in x);
+
+/** Open one record, checked like loadVault does; throws VaultIntegrityError / VaultUnavailableError if it doesn't pass. */
+export async function openRecord(api: ApiClient, masterKey: CryptoKey, id: string, withLedger = true): Promise<OpenedRecord> {
+  const { records } = await api.listRecords();
+  const listed = records.find((r) => r.id === id);
+  if (!listed) throw vaultError([{ kind: 'missing', id }]);
+  const r = await checkRecord(api, masterKey, listed, withLedger);
+  if (isProblem(r)) throw vaultError([r]);
+  return r;
+}
+
+/**
+ * The opened records, newest first, plus what didn't pass (`problems`; `unreadable` is how many). Only with
+ * `allowPartial` can there be any: those records are left out, so whatever is "latest" may be an older version.
+ * `listed` is every id the server listed.
+ */
+export type LoadedVault = OpenedRecord[] & { problems: VaultProblem[]; unreadable: number; listed: string[] };
+
+export interface LoadVaultOptions {
+  /** include 'profile' (preferences) records; left out by default */
+  includeProfile?: boolean;
+  /** check each record's ledger entry (default true) */
+  withLedger?: boolean;
+  /**
+   * Read-only screens only (Home, Download my data, her preferences): return what did pass, with `problems`, instead of
+   * throwing. Anything that saves, seals, shares or resumes loads without it: writes require a clean load.
+   */
+  allowPartial?: boolean;
+}
+
+/**
+ * Load, decrypt and check every record in the vault, newest first, marking superseded versions. Fails closed: if any
+ * record doesn't pass (see VaultProblem), throws VaultIntegrityError or VaultUnavailableError, unless `allowPartial`.
+ * A list request that fails always throws (there is nothing to show).
  */
 export async function loadVault(
   api: ApiClient,
   masterKey: CryptoKey,
-  { includeProfile = false, withLedger = true }: { includeProfile?: boolean; withLedger?: boolean } = {},
+  { includeProfile = false, withLedger = true, allowPartial = false }: LoadVaultOptions = {},
 ): Promise<LoadedVault> {
-  const { records } = await api.listRecords();
-  const opened = await Promise.all(records.map((r) => openRecord(api, masterKey, r.id, withLedger).catch(() => null)));
-  const unreadable = opened.filter((x) => x === null).length;
-  const list = opened.filter((x): x is OpenedRecord => !!x && (includeProfile || x.payload.kind !== 'profile'));
+  let records: VaultRecordMeta[];
+  try {
+    records = (await api.listRecords()).records;
+  } catch (e) {
+    throw vaultError([requestProblem(e, 'list')]);
+  }
+  const results = await Promise.all(records.map((r) => checkRecord(api, masterKey, r, withLedger)));
+  const problems = results.filter(isProblem);
+  // a record names an earlier version the server didn't list (the server checks supersedes is hers when it is saved)
+  const ids = new Set(records.map((r) => r.id));
+  for (const r of records) if (r.supersedes && !ids.has(r.supersedes)) problems.push({ kind: 'missing', id: r.supersedes });
+  if (problems.length && !allowPartial) throw vaultError(problems);
+  const list = results.filter((x): x is OpenedRecord => !isProblem(x) && (includeProfile || x.payload.kind !== 'profile'));
   const supersededBy = new Map<string, string>();
   for (const r of list) if (r.meta.supersedes) supersededBy.set(r.meta.supersedes, r.meta.id);
   for (const r of list) r.supersededBy = supersededBy.get(r.meta.id);
   list.sort((a, b) => b.meta.createdAt.localeCompare(a.meta.createdAt));
-  return Object.assign(list, { unreadable });
+  return Object.assign(list, { problems, unreadable: problems.length, listed: records.map((r) => r.id) });
+}
+
+/** Her records and her draft slot, loaded together and checked against each other. */
+export interface LoadedSpace {
+  vault: LoadedVault;
+  slot: DraftSlotState;
+  /** everything that didn't pass, records and draft (empty unless `allowPartial`) */
+  problems: VaultProblem[];
 }
 
 /**
- * Refusing to save from a partial vault: some saved versions couldn't be opened, so saving now would put an older
- * version on top of her newest. The message is unreadableNotice's calm wording (friendlyError shows it as is).
+ * loadVault plus her draft slot (lib/draftSlot.ts), failing closed the same way. The draft counts: a slot that is stored
+ * but doesn't open is an integrity problem, one that can't be fetched is unavailable, and a draft marked as the source
+ * of a sealed version the server didn't list is `missing` (it hid her newest seal).
  */
-export class UnreadableVaultError extends Error {
-  constructor(readonly unreadable: number) {
-    super(unreadableNotice(unreadable) ?? 'Some saved versions of your space could not be opened just now.');
-    this.name = 'UnreadableVaultError';
+export async function loadSpace(api: ApiClient, masterKey: CryptoKey, opts: LoadVaultOptions = {}): Promise<LoadedSpace> {
+  const [vault, slotOrProblem] = await Promise.all([
+    loadVault(api, masterKey, { ...opts, allowPartial: true }),
+    loadDraftSlot(api, masterKey).catch((e: unknown) => requestProblem(e, DRAFT_PROBLEM_ID)),
+  ]);
+  const problems = [...vault.problems];
+  let slot: DraftSlotState;
+  if ('kind' in slotOrProblem && !('slot' in slotOrProblem)) {
+    problems.push(slotOrProblem);
+    // not known: nothing may be saved over it
+    slot = { slot: null, unreadable: true, version: null, draftMode: 'slot' };
+  } else {
+    slot = slotOrProblem as DraftSlotState;
+    if (slot.unreadable) problems.push({ kind: 'integrity', reason: slot.unreadableReason ?? 'gcm', id: DRAFT_PROBLEM_ID });
+    const sealedId = slot.slot?.value.sealedRecordId;
+    if (sealedId && !vault.listed.includes(sealedId)) problems.push({ kind: 'missing', id: sealedId });
   }
-}
-
-/** Calm words for saved versions that couldn't be opened (null when there are none). */
-export function unreadableNotice(n: number): string | null {
-  if (!(n > 0)) return null;
-  return (
-    `We couldn’t open ${n === 1 ? 'one saved version' : `${n} saved versions`} of your space just now. ` +
-    `${n === 1 ? 'It is' : 'They are'} still stored, but what you see here may not be your newest save. ` +
-    'Before you continue, you could try again in a moment, or sign out and back in.'
-  );
+  if (problems.length && !opts.allowPartial) throw vaultError(problems);
+  return { vault, slot, problems };
 }
 
 export function latestOf(list: OpenedRecord[], kind: VaultPayload['kind']): OpenedRecord | undefined {
@@ -238,7 +434,8 @@ export function legacyDraftEvidence(list: OpenedRecord[]): EvidenceItem[] {
 
 /** The latest encrypted profile record, if she has one. */
 export async function getProfile(api: ApiClient, masterKey: CryptoKey): Promise<{ profile: VaultProfile; recordId: string } | null> {
-  const list = await loadVault(api, masterKey, { includeProfile: true, withLedger: false });
+  // Read-only: an older name is shown at worst. Saving a new one doesn't build on the old (it replaces it).
+  const list = await loadVault(api, masterKey, { includeProfile: true, withLedger: false, allowPartial: true });
   const r = latestOf(list, 'profile');
   return r?.payload.profile ? { profile: r.payload.profile, recordId: r.meta.id } : null;
 }

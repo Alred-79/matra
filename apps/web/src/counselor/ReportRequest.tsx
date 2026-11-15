@@ -15,10 +15,10 @@ import { Link, useParams } from 'react-router-dom';
 import { fromBase64, publicKeyFingerprint, verifyCounselorRoster, wrapKeyForRecipient } from '@matra/crypto';
 import type { ReportRevokeReason, SurvivorReportRequest, WrappedKey } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
-import { UnreadableNote } from '../components/UnreadableNote';
+import { VaultStopped } from '../components/UnreadableNote';
 import { REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
 import { friendlyError } from '../lib/session';
-import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadVault } from '../lib/vault';
+import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadSpace } from '../lib/vault';
 import { MATCH_PINS } from '../matchPins';
 import { escrowLabel, useMatchingSession } from '../lib/matching';
 import type { MatchingApiClient } from '../api/matching';
@@ -46,7 +46,8 @@ export function ReportRequest() {
   const { id = '' } = useParams();
   const { api, session } = useMatchingSession();
   const data = useAsync(async () => {
-    const [{ requests }, records, { entries }] = await Promise.all([api.reportRequests(), loadVault(api, session.masterKey), api.listEscrow()]);
+    // Fails closed (lib/vault.ts loadSpace): only a space that loaded cleanly is released, so `current` is her newest
+    const [{ requests }, { vault: records }, { entries }] = await Promise.all([api.reportRequests(), loadSpace(api, session.masterKey), api.listEscrow()]);
     const req = requests.find((r) => r.id === id);
     if (!req) return null;
     const entry = entries.find((e) => e.id === req.entryId);
@@ -56,10 +57,9 @@ export function ReportRequest() {
       entry ? escrowLabel(entry.labelEnvelope, session.masterKey) : Promise.resolve(undefined),
     ]);
     const current = finals(records).find((r) => !r.supersededBy);
-    // saved versions that couldn't be opened: `current` may be older than her newest sealed account, so sharing stays off.
     // A version sealed before draft slots also holds her working notes, and the counselor would receive the whole
     // envelope: it is never released (`legacy`).
-    return { req, fingerprint, vouched, label, current, unreadable: records.unreadable, legacy: !!current && !isCleanFinal(current.payload) };
+    return { req, fingerprint, vouched, label, current, legacy: !!current && !isCleanFinal(current.payload) };
   }, [api, id, session.masterKey]);
   const [withEvidence, setWithEvidence] = useState(false);
   const [fpConfirmed, setFpConfirmed] = useState(false);
@@ -97,7 +97,7 @@ export function ReportRequest() {
   }
 
   async function share() {
-    if (!d || !req || !d.current || !keyOk || !agreed || d.unreadable > 0 || d.legacy) return;
+    if (!d || !req || !d.current || !keyOk || !agreed || d.legacy) return;
     const record = d.current;
     const blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }> = [];
     if (withEvidence && evidence.length) {
@@ -129,7 +129,7 @@ export function ReportRequest() {
         <Link className="back-link" to="/vault">← Home</Link>
       </p>
       {data.loading && <Loading label="Opening…" />}
-      {data.error && <ErrorNote>{data.error}</ErrorNote>}
+      {data.error && <VaultStopped error={data.error} onRetry={() => void data.reload()} />}
       {!data.loading && !data.error && !req && (
         <div className="card stack">
           <p style={{ margin: 0 }}>This request is no longer here. Nothing was shared.</p>
@@ -216,7 +216,6 @@ export function ReportRequest() {
                   ))}
                 </ul>
               </section>
-              <UnreadableNote count={d.unreadable} />
               {d.legacy && <ErrorNote>{LEGACY_FINAL_NOTICE}</ErrorNote>}
               {!d.current ? (
                 <div className="card stack">
@@ -288,7 +287,7 @@ export function ReportRequest() {
                 {d.current && (
                   <button
                     className="btn btn-primary"
-                    disabled={!keyOk || !agreed || !!st.busy || d.unreadable > 0 || d.legacy}
+                    disabled={!keyOk || !agreed || !!st.busy || d.legacy}
                     onClick={() => void act('yes', share, 'Locking your report for this counselor, on your device…')}
                   >
                     Yes, share my report

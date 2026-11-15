@@ -38,7 +38,7 @@ export function ExportCard({
         `Downloaded ${out.fileName}: ${plural(out.recordCount, 'saved version')} and ${plural(out.evidenceCount, 'evidence file')}.` +
           (out.problems.length ? ` ${out.problems.length} file(s) had a problem. See evidence/manifest.json.` : '') +
           (out.unreadableRecords
-            ? ` ${plural(out.unreadableRecords, 'saved version')} couldn’t be opened just now, so ${out.unreadableRecords === 1 ? 'it isn’t' : 'they aren’t'} in this download. You could try again in a moment.`
+            ? ` ${out.unreadableRecords === 1 ? 'One part' : `${out.unreadableRecords} parts`} of your space couldn’t be opened or didn’t match what you saved, so ${out.unreadableRecords === 1 ? 'it isn’t' : 'they aren’t'} in this download (evidence/manifest.json says which). You could try again in a moment.`
             : ''),
       );
       setConfirming(false);

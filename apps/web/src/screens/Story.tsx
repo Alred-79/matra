@@ -7,9 +7,8 @@ import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common'
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
 import {
-  UnreadableVaultError,
   foldInLateEvidence,
-  loadVault,
+  loadSpace,
   mergeEvidence,
   resumeFrom,
   shortHash,
@@ -17,7 +16,7 @@ import {
 } from '../lib/vault';
 import { SlotConflictError, loadDraftSlot, saveDraftSlot } from '../lib/draftSlot';
 import { sealStory } from '../lib/sealStory';
-import { UnreadableNote } from '../components/UnreadableNote';
+import { VaultStopped } from '../components/UnreadableNote';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { matchContactOf } from '../intake/record';
 import { PhoneStepCard } from '../components/PhoneStepCard';
@@ -35,8 +34,6 @@ interface Boot {
   working: WorkingData;
   previousFinalId?: string;
   hasSealed: boolean;
-  /** saved versions (or her draft slot) that couldn't be opened: what she resumed from may not be her newest save */
-  unreadable: number;
 }
 
 export function Story() {
@@ -49,10 +46,6 @@ export function Story() {
   const [vaultSave, setVaultSave] = useState<{ phase: SavePhase; at?: number }>({ phase: 'idle' });
   // Autosave bookkeeping. `stopped` is set by Quick exit / lock (wipe) and while sealing: nothing is saved after it.
   const auto = useRef({ lastAt: 0, lastJson: '', inFlight: null as Promise<void> | null, timer: undefined as number | undefined, failures: 0, stopped: false });
-  // Some saved versions couldn't be opened, so the draft she resumed may be older than her newest save. Nothing is
-  // saved or sealed until she chooses to keep writing from it. Kept apart from `stopped`, which a failed seal resets.
-  const [onHold, setOnHold] = useState(false);
-  const onHoldRef = useRef(false);
   // Her draft was saved from another device or tab after this page opened (the slot's version moved on). Saving pauses
   // until she chooses which draft to keep; nothing is merged or overwritten for her.
   const [conflict, setConflict] = useState(false);
@@ -73,10 +66,13 @@ export function Story() {
   const [fileCount, setFileCount] = useState(0);
 
   // Load: in-memory working draft first; else her draft slot (or, for an account with no slot yet, its older records).
+  // Fails closed (lib/vault.ts loadSpace): if any saved version or her draft didn't load, or didn't match what she
+  // saved, nothing here opens, saves or seals; she sees why, and Try again.
   useEffect(() => {
     let alive = true;
+    setBootError(null);
     (async () => {
-      const [mem, vault, slot] = await Promise.all([getWorkingData(), loadVault(api, session.masterKey), loadDraftSlot(api, session.masterKey)]);
+      const [mem, { vault, slot }] = await Promise.all([getWorkingData(), loadSpace(api, session.masterKey)]);
       const resume = resumeFrom(slot.slot, vault);
       const final = resume.final;
       // A new sealed version keeps the evidence of the one it replaces.
@@ -101,14 +97,7 @@ export function Story() {
       setPastSafety(!!working.draft && safetyStage(working.draft) === 'done');
       setMode(working.draft?.space?.mode === 'interview' ? 'interview' : 'space');
       setFileCount(working.evidence.length);
-      // A stored draft slot that doesn't open counts like a saved version that doesn't: nothing is saved over it unless
-      // she chooses to keep writing from what did open.
-      const unreadable = vault.unreadable + (slot.unreadable ? 1 : 0);
-      if (unreadable > 0) {
-        onHoldRef.current = true;
-        setOnHold(true);
-      }
-      setBoot({ working, previousFinalId: final?.meta.id, hasSealed: !!final, unreadable });
+      setBoot({ working, previousFinalId: final?.meta.id, hasSealed: !!final });
     })().catch((e) => alive && setBootError(friendlyError(e)));
     return () => {
       alive = false;
@@ -142,7 +131,7 @@ export function Story() {
    */
   async function saveToVault(): Promise<void> {
     const a = auto.current;
-    if (a.stopped || onHoldRef.current || conflictRef.current) return;
+    if (a.stopped || conflictRef.current) return;
     window.clearTimeout(a.timer);
     a.timer = undefined;
     while (a.inFlight) await a.inFlight;
@@ -206,7 +195,7 @@ export function Story() {
   /** Coalesce: one pending save at a time, a moment after the change and at least a minute after the last save. */
   function scheduleSave(delay?: number) {
     const a = auto.current;
-    if (a.stopped || onHoldRef.current || conflictRef.current) return;
+    if (a.stopped || conflictRef.current) return;
     if (a.timer !== undefined) {
       if (delay === undefined) return;
       window.clearTimeout(a.timer);
@@ -309,9 +298,6 @@ export function Story() {
    */
   async function onComplete(intake: IntakeRecord): Promise<void> {
     if (!boot) throw new Error('Your vault is still opening.');
-    // "Keep writing" only resumes draft saves. Sealing (and lodging match entries) reads the earlier sealed version
-    // from this partial vault, so it waits until every saved version opens again.
-    if (boot.unreadable > 0) throw new UnreadableVaultError(boot.unreadable);
     if (conflictRef.current) throw new Error(CONFLICT_SEAL);
     window.clearTimeout(saveTimer.current);
     // No draft autosave while sealing: sealStory saves the draft itself, first, with compare-and-swap.
@@ -431,12 +417,6 @@ export function Story() {
     }
   }
 
-  /** Her choice to carry on from the version that opened: saving starts again, and her next save is her newest. */
-  function keepWriting() {
-    onHoldRef.current = false;
-    setOnHold(false);
-    if (pastSafetyRef.current) scheduleSave();
-  }
 
   const statusLine = <SaveStatus phase={vaultSave.phase} at={vaultSave.at} onSaveNow={() => void saveToVault()} />;
 
@@ -499,25 +479,11 @@ export function Story() {
   return (
     <div className="stack-lg">
       <PageTitle>My story</PageTitle>
-      {bootError && <ErrorNote>{bootError}</ErrorNote>}
+      {bootError && boot && <ErrorNote>{bootError}</ErrorNote>}
+      {bootError && !boot && <VaultStopped error={bootError} onRetry={() => setBootRound((n) => n + 1)} />}
       {!boot && !bootError && <Loading label="Opening your draft…" />}
       {boot && (
         <>
-          <UnreadableNote count={boot.unreadable} />
-          {onHold && (
-            <div className="card soft stack" data-testid="story-on-hold">
-              <p className="small" style={{ margin: 0 }}>
-                Saving is paused, so an older version isn’t saved over your newest one. Reloading the page may fix this.
-                If it doesn’t, you can keep writing from the version that opened. Your next save then becomes your newest
-                version.
-              </p>
-              <div>
-                <button type="button" className="btn btn-small" onClick={keepWriting}>
-                  Keep writing from the version that opened
-                </button>
-              </div>
-            </div>
-          )}
           {conflictCard}
           {boot.hasSealed && (
             <p className="card soft small">
@@ -537,7 +503,7 @@ export function Story() {
               onSwitchToInterview={(d) => switchMode(d, 'interview')}
               onCheckpoint={onCheckpoint}
               hasSealed={boot.hasSealed}
-              saveStatus={onHold || conflict ? undefined : statusLine}
+              saveStatus={conflict ? undefined : statusLine}
             />
           ) : (
             <>
@@ -550,7 +516,7 @@ export function Story() {
                   ← Back to the open story space
                 </button>
               </p>
-              {pastSafety && !onHold && !conflict && <div className="space-root space-status-row">{statusLine}</div>}
+              {pastSafety && !conflict && <div className="space-root space-status-row">{statusLine}</div>}
               {fileCount > 0 && <p className="small muted">{fileCount} evidence file(s) will be attached when you seal.</p>}
               <IntakeChat
                 key={`interview-${bootRound}`}

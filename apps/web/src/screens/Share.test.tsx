@@ -1,13 +1,13 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { decryptJSON, encryptJSON, generateContentKey, unwrapKeyWithPrivate, wrapKeyWithMaster } from '@matra/crypto';
-import type { AttorneyProfile, VaultRecord, WrappedKey } from '@matra/shared';
-import { envelopeHash } from '../api/client';
+import { decryptJSON, sealSlot, unwrapKeyWithPrivate } from '@matra/crypto';
+import type { AttorneyProfile, WrappedKey } from '@matra/shared';
 import { sampleRecord } from '../brief/fixtures';
 import { useSession } from '../lib/session';
 import { fakeAuthFetch } from '../test/fakeServer';
+import { storedRecord, vaultRoutes, type StoredRecord } from '../test/fakeVault';
 import { Harness, current } from '../test/sessionHarness';
 import { Share } from './Share';
 
@@ -17,22 +17,20 @@ function Gate() {
   return useSession().session ? <Share /> : <p>Signed out</p>;
 }
 
-describe('Share: saved versions that could not be opened', () => {
-  it('tells her, and keeps "Yes, share" off, so an older version is never shared silently', async () => {
-    const user = userEvent.setup();
+describe('Share fails closed: only a space that loaded cleanly is offered', () => {
+  async function shareWith(username: string, opts: { failNewest?: () => boolean; slotSays?: string } = {}) {
     const base = fakeAuthFetch();
-    const records: VaultRecord[] = [];
+    const stored: StoredRecord[] = [];
     const attorneys: AttorneyProfile[] = [];
+    const routes = vaultRoutes(stored);
+    let slot: unknown = null;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://x');
-      if (url.pathname === '/api/vault/records') return json(200, { records });
-      if (url.pathname.startsWith('/api/vault/records/')) {
-        const id = decodeURIComponent(url.pathname.split('/').pop()!);
-        // her newest sealed version can't be fetched right now
-        if (id === 'r-newest') return json(500, { error: 'Something went wrong' });
-        return json(200, { record: records.find((r) => r.id === id) });
-      }
-      if (url.pathname.startsWith('/api/ledger/entries/')) return json(404, { error: 'not found' });
+      // her newest sealed version can't be fetched right now
+      if (url.pathname === '/api/vault/records/r-newest' && opts.failNewest?.()) return json(500, { error: 'Something went wrong' });
+      if (url.pathname.startsWith('/api/vault/slots/')) return json(200, { slot, draftMode: 'slot' });
+      const hit = routes(input, init);
+      if (hit) return hit;
       if (url.pathname === '/api/attorneys') return json(200, { attorneys });
       return base.fetchImpl(input, init);
     });
@@ -44,16 +42,13 @@ describe('Share: saved versions that could not be opened', () => {
       </Harness>,
     );
     await act(async () => {
-      await current!.register({ username: 'wren-share', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username, passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
     });
-    // fill her vault after sign-up (her master key exists now): one readable sealed version, one that fails to load
-    const key = await generateContentKey();
-    const envelope = await encryptJSON({ kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, key);
-    const older: VaultRecord = {
-      id: 'r-older', ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
-      ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(key, current!.session!.masterKey),
-    };
-    records.push(older, { ...older, id: 'r-newest', createdAt: '2026-08-20T00:00:00Z', supersedes: 'r-older' });
+    const mk = current!.session!.masterKey;
+    stored.push(await storedRecord(mk, { kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, { id: 'r-older' }));
+    if (opts.failNewest) stored.push(await storedRecord(mk, { kind: 'final', record: sampleRecord, savedAt: '2026-08-20T00:00:00Z' }, { id: 'r-newest', supersedes: 'r-older' }));
+    if (opts.slotSays)
+      slot = { ...(await sealSlot({ kind: 'draft', slotVersion: 1, draft: { answers: {} }, evidence: [], sealedRecordId: opts.slotSays, savedAt: '2026-08-20T00:00:00Z' }, mk)), version: 'v1', updatedDay: '2026-08-20' };
     // any valid RSA key will do for the attorney (this test build pins no org key, so it shows as unpinned)
     attorneys.push({
       userId: 'a1', displayName: 'Attorney Test', jurisdictions: ['NJ'], practiceAreas: [], verified: true, acceptsProBono: true,
@@ -64,16 +59,31 @@ describe('Share: saved versions that could not be opened', () => {
       current!.lock();
     });
     await act(async () => {
-      await current!.login('wren-share', 'acorn-maple-violin-otter-quartz');
+      await current!.login(username, 'acorn-maple-violin-otter-quartz');
     });
+    return { fetchImpl };
+  }
+  const posted = (f: ReturnType<typeof vi.fn>) => f.mock.calls.some(([u, i]) => String(u).endsWith('/api/shares') && (i as RequestInit | undefined)?.method === 'POST');
 
-    const note = await screen.findByTestId('vault-unreadable', {}, { timeout: 15_000 });
-    expect(note).toHaveTextContent(/couldn’t open one saved version.*may not be your newest save/);
+  it('her newest version can’t be fetched: "couldn’t reach us", no attorney to choose; Try again once it is back', async () => {
+    const user = userEvent.setup();
+    let down = true;
+    const { fetchImpl } = await shareWith('wren-share', { failNewest: () => down });
+    const stopped = await screen.findByTestId('vault-stopped', {}, { timeout: 15_000 });
+    expect(stopped).toHaveTextContent(/We couldn’t reach Matra to open all of your space just now/);
+    expect(screen.queryByRole('button', { name: 'Review and decide' })).toBeNull();
+    expect(posted(fetchImpl)).toBe(false);
+    down = false;
+    await user.click(within(stopped).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Review and decide' }, { timeout: 15_000 })).toBeInTheDocument();
+  }, 60_000);
 
-    await user.click(await screen.findByRole('button', { name: 'Review and decide' }, { timeout: 15_000 }));
-    await user.click(screen.getByLabelText('I agree to the statement above.'));
-    expect(screen.getByRole('button', { name: /Yes, share with Attorney Test/ })).toBeDisabled();
-    expect(fetchImpl.mock.calls.some(([u, i]) => String(u).endsWith('/api/shares') && i?.method === 'POST')).toBe(false);
+  it('her draft says it became a sealed version the server doesn’t list: "doesn’t match what you saved", nothing offered', async () => {
+    const { fetchImpl } = await shareWith('wren-hidden', { slotSays: 'r-hidden' });
+    const stopped = await screen.findByTestId('vault-stopped', {}, { timeout: 15_000 });
+    expect(stopped).toHaveTextContent(/doesn’t match what you saved/);
+    expect(screen.queryByRole('button', { name: 'Review and decide' })).toBeNull();
+    expect(posted(fetchImpl)).toBe(false);
   }, 60_000);
 });
 
@@ -84,15 +94,14 @@ describe('Share: only the sealed account itself is ever shared', () => {
   ])('%s', async (_name, legacy) => {
     const user = userEvent.setup();
     const base = fakeAuthFetch();
-    const records: VaultRecord[] = [];
+    const stored: StoredRecord[] = [];
+    const routes = vaultRoutes(stored);
     const attorneys: AttorneyProfile[] = [];
     const shares: Array<{ recordId: string; recipientWrappedKey: WrappedKey }> = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://x');
-      if (url.pathname === '/api/vault/records') return json(200, { records });
-      if (url.pathname.startsWith('/api/vault/records/'))
-        return json(200, { record: records.find((r) => r.id === decodeURIComponent(url.pathname.split('/').pop()!)) });
-      if (url.pathname.startsWith('/api/ledger/entries/')) return json(404, { error: 'not found' });
+      const hit = routes(input, init);
+      if (hit) return hit;
       if (url.pathname === '/api/attorneys') return json(200, { attorneys });
       if (url.pathname === '/api/vault/blobs') return json(200, { blobs: [] });
       if (url.pathname === '/api/shares' && init?.method === 'POST') {
@@ -111,15 +120,10 @@ describe('Share: only the sealed account itself is ever shared', () => {
     await act(async () => {
       await current!.register({ username: 'wren-clean', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
     });
-    const key = await generateContentKey();
     const payload = legacy
       ? { kind: 'final', record: sampleRecord, draft: { answers: { 'person.matchContact': { detail: '555-0100' } } }, escrowedHashes: ['ab12'], savedAt: '2026-08-19T00:00:00Z' }
       : { kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' };
-    const envelope = await encryptJSON(payload, key);
-    records.push({
-      id: 'r-final', ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
-      ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(key, current!.session!.masterKey),
-    });
+    stored.push(await storedRecord(current!.session!.masterKey, payload, { id: 'r-final', createdAt: '2026-08-19T00:00:00Z' }));
     // the attorney's key is her own here, so the test can open what the attorney would receive
     attorneys.push({
       userId: 'a1', displayName: 'Attorney Test', jurisdictions: ['NJ'], practiceAreas: [], verified: true, acceptsProBono: true,
@@ -147,7 +151,7 @@ describe('Share: only the sealed account itself is ever shared', () => {
     expect(shares).toHaveLength(1);
     // what the attorney can open: exactly her account
     const recordKey = await unwrapKeyWithPrivate(shares[0]!.recipientWrappedKey, current!.session!.privateKey);
-    const opened = await decryptJSON<Record<string, unknown>>(records.find((r) => r.id === shares[0]!.recordId)!.envelope, recordKey);
+    const opened = await decryptJSON<Record<string, unknown>>(stored.find((r) => r.record.id === shares[0]!.recordId)!.record.envelope, recordKey);
     expect(Object.keys(opened).sort()).toEqual(['kind', 'record', 'savedAt']);
   }, 60_000);
 });

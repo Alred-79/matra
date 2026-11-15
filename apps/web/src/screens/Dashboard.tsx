@@ -3,8 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import type { AttorneyProfile, AuditEvent, EscrowEntry, Share, SurvivorReportRequest } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { finals, isCleanFinal, latestOf, legacyDraftEvidence, loadVault, mergeEvidence, resumeFrom, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
-import { loadDraftSlot } from '../lib/draftSlot';
+import { finals, isCleanFinal, latestOf, legacyDraftEvidence, loadSpace, mergeEvidence, resumeFrom, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
 import { matchingApi } from '../api/matching';
 import { escrowLabel, hasUnsealedMatches } from '../lib/matching';
 import { UnreadableNote } from '../components/UnreadableNote';
@@ -137,11 +136,13 @@ export function Dashboard() {
   const location = useLocation();
   const firstVisit = !!(location.state as { firstVisit?: boolean } | null)?.firstVisit;
 
-  // profile records included only so the activity list can name them; finals/latestOf pick by kind
-  const vault = useAsync(() => loadVault(api, mk, { includeProfile: true }), [api, mk]);
+  // Her records and her draft (lib/draftSlot.ts: saved over as she writes, kept after sealing so she can add to it).
+  // Home only reads, so it is the one screen that shows what did load when something didn't (`allowPartial`), with a
+  // note saying what is left out and why. Profile records included only so the activity list can name them.
+  const space = useAsync(() => loadSpace(api, mk, { includeProfile: true, allowPartial: true }), [api, mk]);
+  const vault = { loading: space.loading, error: space.error, data: space.data?.vault };
+  const slot = { data: space.data?.slot };
   const blobs = useAsync(() => api.listBlobs().then((r) => r.blobs), [api]);
-  // Her draft (lib/draftSlot.ts): saved over as she writes, kept after sealing so she can add to it.
-  const slot = useAsync(() => loadDraftSlot(api, mk), [api, mk]);
   const working = useAsync(() => getWorkingData(), [getWorkingData, workingVersion]);
   // Sealed matching only in a build that has it (MATRA_MATCHING=on); the other branch is all a pilot build contains.
   const escrow = useAsync(
@@ -354,7 +355,7 @@ export function Dashboard() {
         {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
         {!vault.loading && !vault.error && (
           <>
-            <UnreadableNote count={(vault.data?.unreadable ?? 0) + (slot.data?.unreadable ? 1 : 0)} />
+            <UnreadableNote problems={space.data?.problems} />
             {hasDraft && (
               <p className="small">
                 {working.data ? (

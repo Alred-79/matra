@@ -91,6 +91,10 @@
 - **No operator reset exists.** The server can't reset anyone's passphrase: nothing it stores opens a vault. Without a recovery code, a forgotten passphrase means the data is permanently unrecoverable. This is inherent to zero knowledge.
 - AES-GCM uses a random 96-bit IV per encryption. Every key is random and per-object, so nonce reuse is not a practical concern at MVP scale.
 
+**Loading her space fails closed** (`apps/web/src/lib/vault.ts` `loadVault`, `loadSpace`)
+- Her client checks every record it opens: the record key and ciphertext decrypt under her key (AES-GCM), the plaintext is a record this app wrote, the envelope's SHA-256 equals the hash the server listed and stored, and the ledger entry the record names attests that hash, for that record id. Her draft slot must decrypt too. It also catches some records the server leaves out of the list: a listed record it won't return, a record a listed one supersedes, or the sealed version her draft says it became (`sealedRecordId`). It can't detect a version nothing points to; that needs a signed per-account sequence (envelope v2, later).
+- If anything fails, screens that save, seal, share, release, resume or summarize (My story, Evidence, Share, a counselor's report request, the incident summary, sealed-match retries) open nothing and say why, with Try again. "We couldn't reach Matra" (a request didn't get through) and "doesn't match what you saved" (it came back different) are worded differently. Only read-only views (Home, Download my data, her display name) show what did pass, with a note saying what is left out; the download lists each problem in its manifest. There is no "keep writing from what opened": writes require a clean load. A persistent mismatch therefore blocks writing until it is resolved (section 6).
+
 **Recovery code (optional; threat model W20)**
 - Moving to key version 2 re-encrypts nothing: for an existing account AS is exactly the bytes version 1 derived (WebCrypto `deriveKey` of a 256-bit key equals `deriveBits(256)` with the same HKDF parameters; `packages/crypto/src/recovery.test.ts` checks it). Version 1 accounts keep their derivation until she sets up a code.
 - The code is 128 bits from the platform CSPRNG plus a CRC-8 check byte, shown as 28 Crockford base32 characters in groups of 4. The check byte only catches typing mistakes (every single-character typo is detected) before any network call; it is not a secret and not a hash of anything secret. The code is **not** stretched with PBKDF2 or Argon2id: it already has 128 bits of entropy, and slow hashing protects human-chosen secrets (the passphrase, W5).
@@ -507,6 +511,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 11. A native or packaged client to reduce the malicious-JavaScript risk.
 12. Optional encrypted storage of **original** evidence files alongside stripped copies.
 13. A documented forensic verification procedure and a named custodian for FRE 902(13)/(14)-style certifications.
+14. **What she can do when part of her space persistently doesn't match what she saved** (section 3, loading fails closed): today every screen that writes stays stopped, and she can still read and download what passes. A recovery path (for example, starting a new draft from her newest sealed version that does pass, recorded in her activity) needs a product and advocate decision. Detecting a version nothing points to needs a signed per-account sequence (envelope v2).
 
 ---
 
