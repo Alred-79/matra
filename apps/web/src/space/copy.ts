@@ -80,10 +80,15 @@ export const COPY = {
     editNote: 'Only you can change your words. Nothing is changed for you.',
     edited: (when: string) => `edited ${when}`,
     editedAnnounce: 'Your changes are saved.',
+    // Every draft save is kept as a version (MATRA_DRAFT_MODE=keep-versions):
     removeConfirm:
       'Remove this part from your story? It will be taken off your list. Earlier saved versions of your draft may still include it until you delete your account.',
     removeConfirmSealed:
       'Remove this part from your draft? Your earlier sealed version stays as it was, and earlier saved versions of your draft may still include it until you delete your account.',
+    // Her draft is saved over as she writes (MATRA_DRAFT_MODE=slot, the default):
+    removeConfirmSlot: 'Remove this part from your story? It will be taken off your list, and out of your draft the next time it saves.',
+    removeConfirmSealedSlot:
+      'Remove this part from your draft? It comes out of your draft the next time it saves. Your earlier sealed version stays as it was.',
     removeYes: 'Yes, remove it',
     removeNo: 'Keep it',
     empty: 'Nothing here yet. When you add something, it will show here, just as you wrote it.',

@@ -120,8 +120,8 @@ Not by default. A personal journal isn't privileged just because it's encrypted.
 **"Does this help with 'she waited too long' arguments?"**
 It can corroborate. A sealed, timestamped record may rebut a claim of *recent* fabrication if it predates the alleged motive (N.J.R.E. 803(a)(2); *Tome*). It doesn't replace her testimony, and the app isn't a fresh complaint.
 
-**"Every saved version is kept. Doesn't that create impeachment material?"**
-Yes, and that's a real trade-off. Next phase: private drafts stay on her device and unsealed, sealing is a deliberate step, and warnings explain the trade-off. We want counsel's view on the right default.
+**"Every sealed version is kept. Doesn't that create impeachment material?"**
+Yes, and that's a real trade-off. Her draft isn't versioned: it's one encrypted copy, saved over as she writes, with no ledger entry. Only sealing, a deliberate step, makes a kept, timestamped version, and warnings explain the trade-off. A deployment can instead keep every draft save (`MATRA_DRAFT_MODE=keep-versions`). We want counsel's view on the right default.
 
 **"Is your ledger admissible? Who certifies it?"**
 Hashes support authentication. They don't overcome hearsay or confrontation objections. We'll need a named custodian, a documented procedure, and external timestamp anchoring before we'd suggest anyone rely on it in court.

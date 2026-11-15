@@ -3,7 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import type { AttorneyProfile, AuditEvent, EscrowEntry, Share, SurvivorReportRequest } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { finals, latestOf, legacyDraftEvidence, loadVault, mergeEvidence, resumeFrom, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { loadDraftSlot } from '../lib/draftSlot';
 import { matchingApi } from '../api/matching';
 import { escrowLabel, hasUnsealedMatches } from '../lib/matching';
 import { UnreadableNote } from '../components/UnreadableNote';
@@ -139,6 +140,8 @@ export function Dashboard() {
   // profile records included only so the activity list can name them; finals/latestOf pick by kind
   const vault = useAsync(() => loadVault(api, mk, { includeProfile: true }), [api, mk]);
   const blobs = useAsync(() => api.listBlobs().then((r) => r.blobs), [api]);
+  // Her draft (lib/draftSlot.ts): saved over as she writes, kept after sealing so she can add to it.
+  const slot = useAsync(() => loadDraftSlot(api, mk), [api, mk]);
   const working = useAsync(() => getWorkingData(), [getWorkingData, workingVersion]);
   // Sealed matching only in a build that has it (MATRA_MATCHING=on); the other branch is all a pilot build contains.
   const escrow = useAsync(
@@ -169,25 +172,27 @@ export function Dashboard() {
   const phoneStep = useAsync(
     __MATRA_MATCHING__
       ? async () => {
-          const final = vault.data && latestOf(vault.data, 'final');
-          if (!final?.payload.record || !(await hasUnsealedMatches(final.payload.record, final.payload.escrowedHashes))) return false;
+          if (!vault.data || !slot.data) return false;
+          const resume = resumeFrom(slot.data.slot, vault.data);
+          if (!resume.final?.payload.record || !(await hasUnsealedMatches(resume.final.payload.record, resume.escrowedHashes))) return false;
           const st = await matchingApi(api).phoneVerificationStatus();
           return st.required && !st.verified;
         }
       : async () => false,
-    [api, vault.data],
+    [api, vault.data, slot.data],
   );
   const [showAllActivity, setShowAllActivity] = useState(false);
 
   const records = vault.data ?? [];
   const sealed = finals(records);
-  const savedDraft = latestOf(records, 'draft');
+  // A draft counts as "in progress" until it is sealed; the save right after sealing marks it with that seal.
+  const savedDraft = slot.data?.slot?.value;
   const latestFinal = latestOf(records, 'final');
-  const evidenceMeta = mergeEvidence(savedDraft?.payload.evidence, latestFinal?.payload.record?.evidence, working.data?.evidence);
+  const evidenceMeta = mergeEvidence(legacyDraftEvidence(records), savedDraft?.evidence, latestFinal?.payload.record?.evidence, working.data?.evidence);
   const metaByBlob = new Map(evidenceMeta.filter((e) => e.blobId).map((e) => [e.blobId!, e]));
   const kindBySeq = new Map(records.filter((r) => r.ledgerEntry).map((r) => [r.ledgerEntry!.seq, r.payload.kind]));
 
-  const hasDraft = !!working.data || (!!savedDraft && !savedDraft.supersededBy);
+  const hasDraft = !!working.data || (!!savedDraft?.draft && !savedDraft.sealedRecordId);
   const currentSeal = sealed.find((r) => !r.supersededBy);
   const fileCount = blobs.data?.length ?? 0;
   const activeShares = (shares.data ?? []).filter(
@@ -349,13 +354,13 @@ export function Dashboard() {
         {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
         {!vault.loading && !vault.error && (
           <>
-            <UnreadableNote count={vault.data?.unreadable} />
+            <UnreadableNote count={(vault.data?.unreadable ?? 0) + (slot.data?.unreadable ? 1 : 0)} />
             {hasDraft && (
               <p className="small">
                 {working.data ? (
                   <span className="badge">Draft in progress — not saved to your space yet</span>
                 ) : (
-                  <span className="badge neutral">Draft saved {formatDate(savedDraft!.payload.savedAt)}</span>
+                  <span className="badge neutral">Draft saved {formatDate(savedDraft!.savedAt)}</span>
                 )}
               </p>
             )}

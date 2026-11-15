@@ -1,7 +1,14 @@
 /**
- * Vault helpers: sealing / opening encrypted records, evidence upload. Sealed matching lives in lib/matching.ts.
+ * Vault helpers: sealing / opening encrypted records, evidence upload. Sealed matching lives in lib/matching.ts; her
+ * draft lives in its draft slot (lib/draftSlot.ts), never in a record.
  * Record payload (encrypted with encryptJSON under a per-record key wrapped by masterKey):
- *   { kind: 'draft' | 'final' | 'profile', draft?, record?, evidence?, escrowedHashes?, profile? }
+ *   { kind: 'final', record, savedAt }     her sealed account: exactly these three fields, nothing else, because
+ *                                          sharing it with an attorney or releasing it to a counselor hands over the
+ *                                          whole envelope
+ *   { kind: 'profile', profile, savedAt }  her preferences
+ * Records written before draft slots may also be { kind: 'draft', draft, evidence } (every autosave), or a 'final'
+ * that also carries `draft` and `escrowedHashes`. They are WORM, so they stay; they are read only to resume an account
+ * that has no draft slot yet, and are never shown as versions or shared (isCleanFinal).
  *
  * 'profile' records hold her personal preferences (e.g. the name she'd like to be called). They are encrypted like
  * every other record — the server never sees the name — and `loadVault` leaves them out by default, so screens that
@@ -22,6 +29,7 @@ import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, V
 import { envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { stripMetadata } from './metadata';
+import { withoutMatchingAnswers, type LoadedDraftSlot } from './draftSlot';
 import type { WorkingData } from './session';
 import { mirror, typedText } from '../dev/mirror';
 
@@ -32,17 +40,51 @@ export interface VaultProfile {
   updatedAt: string;
 }
 
+/** A record's decrypted payload, as written now or by an earlier version of the app. */
 export interface VaultPayload {
   kind: 'draft' | 'final' | 'profile';
   profile?: VaultProfile;
-  draft?: IntakeDraft;
   record?: IntakeRecord;
-  /** evidence attached while drafting (final records carry it in record.evidence) */
-  evidence?: EvidenceItem[];
-  /** local fingerprints of identifiers already sealed for matching (so re-sealing doesn't resubmit or undo a withdrawal) */
-  escrowedHashes?: string[];
   savedAt: string;
+  /** legacy only (written before draft slots): her answers, in a 'draft' record or alongside a sealed 'final' */
+  draft?: IntakeDraft;
+  /** legacy only: evidence details in a 'draft' record (final records carry them in record.evidence) */
+  evidence?: EvidenceItem[];
+  /** legacy only: fingerprints of identifiers sealed for matching (now kept in the draft slot) */
+  escrowedHashes?: string[];
 }
+
+/** What may be sealed as a record now: her sealed account or her preferences. Drafts go to the draft slot. */
+export type SealPayload =
+  | { kind: 'final'; record: IntakeRecord; savedAt: string }
+  | { kind: 'profile'; profile: VaultProfile; savedAt: string };
+
+/**
+ * The exact plaintext of a sealed record: only the fields of its kind, so nothing else (her draft, unsent words, matching
+ * fingerprints) can ever ride along into an envelope she may later share.
+ */
+function sealedPlaintext(p: SealPayload): SealPayload {
+  if (p.kind === 'final') {
+    if (!p.record) throw new Error('A sealed account needs its record.');
+    return { kind: 'final', record: p.record, savedAt: p.savedAt };
+  }
+  if (p.kind === 'profile') return { kind: 'profile', profile: p.profile, savedAt: p.savedAt };
+  throw new Error('Only a sealed account or preferences can be sealed; drafts are saved to the draft slot.');
+}
+
+const CLEAN_FINAL_KEYS = new Set(['kind', 'record', 'savedAt']);
+
+/**
+ * Whether this sealed version holds only her account (`{kind, record, savedAt}`), so it may be shared or released. One
+ * sealed before draft slots may also hold her draft and matching fingerprints; it is never shared, and she seals again.
+ */
+export function isCleanFinal(payload: VaultPayload): boolean {
+  return payload.kind === 'final' && !!payload.record && Object.keys(payload).every((k) => CLEAN_FINAL_KEYS.has(k));
+}
+
+/** Shown instead of sharing a sealed version saved before draft slots (it also holds her draft). */
+export const LEGACY_FINAL_NOTICE =
+  'Your sealed account was saved in an older format that also keeps your working notes with it. To share only your account, open My story and seal it again first. The earlier version stays as it was.';
 
 export interface OpenedRecord {
   meta: VaultRecord;
@@ -54,12 +96,13 @@ export interface OpenedRecord {
   supersededBy?: string;
 }
 
-export async function sealPayload(api: ApiClient, masterKey: CryptoKey, payload: VaultPayload, supersedes?: string) {
+export async function sealPayload(api: ApiClient, masterKey: CryptoKey, input: SealPayload, supersedes?: string) {
+  const payload = sealedPlaintext(input);
   const key = await generateContentKey();
   const envelope = await encryptJSON(payload, key);
   const ownerWrappedKey = await wrapKeyWithMaster(key, masterKey);
   mirror(
-    payload.kind === 'final' ? 'Her story (sealed)' : payload.kind === 'profile' ? 'Her preferences' : 'Her story (draft, saved as she goes)',
+    payload.kind === 'final' ? 'Her story (sealed)' : 'Her preferences',
     typedText(payload.kind === 'final' ? payload.record : payload),
     `Encrypted here (AES-256-GCM, a new key per version). The server gets the envelope (${envelope.ct.length} base64 characters), the key wrapped by her own key, and a hash.`,
   );
@@ -141,19 +184,54 @@ export function finals(list: OpenedRecord[]): OpenedRecord[] {
   return list.filter((r) => r.payload.kind === 'final' && r.payload.record);
 }
 
+/** Where she picks her story back up, and what goes with it. */
+export interface ResumePoint {
+  draft?: IntakeDraft;
+  /** file details to keep with the draft (the sealed version's are merged in by the caller) */
+  evidence: EvidenceItem[];
+  /** her latest sealed version, if any */
+  final?: OpenedRecord;
+  /** sealed matching on: fingerprints already sealed */
+  escrowedHashes: string[];
+  /** where it came from: her draft slot, or (an account with no slot yet) the records saved before slots */
+  from: 'slot' | 'legacy' | 'none';
+}
+
 /**
- * Where to pick the intake back up: a vault draft saved after the latest seal, otherwise the answers of the latest
- * sealed version (so adding evidence or a detail after sealing never means starting over).
+ * Where to pick the intake back up: her draft slot. It is kept after sealing, so adding evidence or a detail after
+ * sealing never means starting over. An account with no slot yet (it last saved before draft slots) resumes from those
+ * records instead: the newest legacy draft record if it is newer than the latest seal, otherwise the answers a legacy
+ * seal kept beside it. Its next save then makes the slot. Matching answers and fingerprints are dropped in a build
+ * without sealed matching (draftSlot.ts withoutMatchingAnswers).
  */
-export function resumeFrom(list: OpenedRecord[]): { draft?: IntakeDraft; draftRecord?: OpenedRecord; final?: OpenedRecord } {
+export function resumeFrom(slot: LoadedDraftSlot | null, list: OpenedRecord[]): ResumePoint {
   const final = latestOf(list, 'final');
+  const legacyEscrowed = final?.payload.escrowedHashes ?? [];
+  const forBuild = (r: ResumePoint): ResumePoint =>
+    __MATRA_MATCHING__ ? r : { ...r, draft: r.draft && withoutMatchingAnswers(r.draft), escrowedHashes: [] };
+  if (slot)
+    return forBuild({
+      draft: slot.value.draft,
+      evidence: slot.value.evidence,
+      final,
+      escrowedHashes: slot.value.escrowedHashes ?? legacyEscrowed,
+      from: 'slot',
+    });
   const draftRecord = latestOf(list, 'draft');
   const draftIsNewer = !!draftRecord && !draftRecord.supersededBy && (!final || draftRecord.meta.createdAt > final.meta.createdAt);
-  return {
-    draft: (draftIsNewer ? draftRecord.payload.draft : undefined) ?? final?.payload.draft,
-    draftRecord: draftIsNewer ? draftRecord : undefined,
+  const draft = (draftIsNewer ? draftRecord.payload.draft : undefined) ?? final?.payload.draft;
+  return forBuild({
+    draft,
+    evidence: (draftIsNewer ? draftRecord.payload.evidence : undefined) ?? [],
     final,
-  };
+    escrowedHashes: legacyEscrowed,
+    from: draft ? 'legacy' : 'none',
+  });
+}
+
+/** File details an older draft record kept (legacy), so a file added then still has its name. */
+export function legacyDraftEvidence(list: OpenedRecord[]): EvidenceItem[] {
+  return list.filter((r) => r.payload.kind === 'draft').flatMap((r) => r.payload.evidence ?? []);
 }
 
 // ───────────── profile (preferences) ─────────────
@@ -250,7 +328,7 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
 
 /**
  * The story's working copy, plus any files the in-memory working data has that it doesn't (details saved by the
- * Evidence page after the story opened). Her draft stays the story's own; the draft-record id follows the newer save.
+ * Evidence page after the story opened). Her draft stays the story's own; the slot seq follows the newer save.
  * Returns null when there is nothing new.
  */
 export function foldInLateEvidence(story: WorkingData, mem: WorkingData | null): WorkingData | null {
@@ -260,7 +338,7 @@ export function foldInLateEvidence(story: WorkingData, mem: WorkingData | null):
   return {
     ...story,
     evidence: mergeEvidence(story.evidence, mem.evidence),
-    savedDraftRecordId: mem.savedDraftRecordId ?? story.savedDraftRecordId,
+    slotSeq: mem.slotSeq ?? story.slotSeq,
   };
 }
 

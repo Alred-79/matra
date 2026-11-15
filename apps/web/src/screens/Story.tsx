@@ -9,7 +9,6 @@ import { friendlyError, useRequiredSession, type WorkingData } from '../lib/sess
 import {
   UnreadableVaultError,
   foldInLateEvidence,
-  latestOf,
   loadVault,
   mergeEvidence,
   resumeFrom,
@@ -17,6 +16,7 @@ import {
   shortHash,
   uploadEvidence,
 } from '../lib/vault';
+import { SlotConflictError, loadDraftSlot, saveDraftSlot, withoutUnsent } from '../lib/draftSlot';
 import { UnreadableNote } from '../components/UnreadableNote';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { matchContactOf } from '../intake/record';
@@ -24,16 +24,18 @@ import { PhoneStepCard } from '../components/PhoneStepCard';
 import { MatchingError, lodgeMatches } from '../lib/matching';
 import { matchingApi } from '../api/matching';
 
-/** Autosave to her vault: at most one save per minute, a moment after a meaningful change. */
+/** Shown if she tries to seal while two drafts disagree. */
+const CONFLICT_SEAL = 'Your draft was also saved from another device or tab. Choose which draft to keep (above) before you seal.';
+
+/** Autosave to her draft slot (lib/draftSlot.ts): at most one save per minute, a moment after a meaningful change. */
 const MIN_GAP_MS = 60_000;
 const SETTLE_MS = 2_000;
 
 interface Boot {
   working: WorkingData;
   previousFinalId?: string;
-  previousEscrowed: string[];
   hasSealed: boolean;
-  /** saved versions that couldn't be opened: what she resumed from may not be her newest save */
+  /** saved versions (or her draft slot) that couldn't be opened: what she resumed from may not be her newest save */
   unreadable: number;
 }
 
@@ -51,6 +53,13 @@ export function Story() {
   // saved or sealed until she chooses to keep writing from it. Kept apart from `stopped`, which a failed seal resets.
   const [onHold, setOnHold] = useState(false);
   const onHoldRef = useRef(false);
+  // Her draft was saved from another device or tab after this page opened (the slot's seq moved on). Saving pauses
+  // until she chooses which draft to keep; nothing is merged or overwritten for her.
+  const [conflict, setConflict] = useState(false);
+  const conflictRef = useRef(false);
+  // Sealed matching on: fingerprints of identifiers already sealed, kept in her draft slot with every save.
+  const escrowedRef = useRef<string[]>([]);
+  const [bootRound, setBootRound] = useState(0);
   const [pastSafety, setPastSafety] = useState(false);
   const pastSafetyRef = useRef(false);
   pastSafetyRef.current = pastSafety;
@@ -60,49 +69,48 @@ export function Story() {
   const [mode, setMode] = useState<'space' | 'interview'>('space');
   const [fileCount, setFileCount] = useState(0);
 
-  // Load: in-memory working draft first; else the latest draft saved in the vault.
+  // Load: in-memory working draft first; else her draft slot (or, for an account with no slot yet, its older records).
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [mem, vault] = await Promise.all([getWorkingData(), loadVault(api, session.masterKey)]);
-      const { draft: resumeDraft, draftRecord, final } = resumeFrom(vault);
+      const [mem, vault, slot] = await Promise.all([getWorkingData(), loadVault(api, session.masterKey), loadDraftSlot(api, session.masterKey)]);
+      const resume = resumeFrom(slot.slot, vault);
+      const final = resume.final;
       // A new sealed version keeps the evidence of the one it replaces.
       const sealedEvidence = final?.payload.record?.evidence;
       let working: WorkingData;
-      if (mem?.draft) working = { ...mem, evidence: mergeEvidence(sealedEvidence, mem.evidence) };
+      if (mem?.draft) working = { ...mem, evidence: mergeEvidence(sealedEvidence, mem.evidence), slotSeq: mem.slotSeq ?? slot.seq };
       else
         working = {
-          draft: resumeDraft ?? emptyDraft(),
-          evidence: mergeEvidence(sealedEvidence, draftRecord?.payload.evidence, mem?.evidence),
-          savedDraftRecordId: mem?.savedDraftRecordId ?? draftRecord?.meta.id ?? latestOf(vault, 'draft')?.meta.id,
+          draft: resume.draft ?? emptyDraft(),
+          evidence: mergeEvidence(sealedEvidence, resume.evidence, mem?.evidence),
+          slotSeq: slot.seq,
         };
       if (!alive) return;
       workingRef.current = working;
-      if (!mem?.draft && draftRecord && working.draft) {
-        // Resumed from the vault: that is what is saved, so there is nothing new to save yet.
+      escrowedRef.current = resume.escrowedHashes;
+      if (!mem?.draft && slot.slot && working.draft) {
+        // Resumed from her slot: that is what is saved, so there is nothing new to save yet.
         auto.current.lastJson = JSON.stringify([working.draft, working.evidence]);
-        setVaultSave({ phase: 'saved', at: Date.parse(draftRecord.meta.createdAt) });
+        setVaultSave({ phase: 'saved', at: Date.parse(slot.slot.value.savedAt) });
       }
       setPastSafety(!!working.draft && safetyStage(working.draft) === 'done');
       setMode(working.draft?.space?.mode === 'interview' ? 'interview' : 'space');
       setFileCount(working.evidence.length);
-      if (vault.unreadable > 0) {
+      // A stored draft slot that doesn't open counts like a saved version that doesn't: nothing is saved over it unless
+      // she chooses to keep writing from what did open.
+      const unreadable = vault.unreadable + (slot.unreadable ? 1 : 0);
+      if (unreadable > 0) {
         onHoldRef.current = true;
         setOnHold(true);
       }
-      setBoot({
-        working,
-        previousFinalId: final?.meta.id,
-        previousEscrowed: final?.payload.escrowedHashes ?? [],
-        hasSealed: !!final,
-        unreadable: vault.unreadable,
-      });
+      setBoot({ working, previousFinalId: final?.meta.id, hasSealed: !!final, unreadable });
     })().catch((e) => alive && setBootError(friendlyError(e)));
     return () => {
       alive = false;
       window.clearTimeout(saveTimer.current);
     };
-  }, [api, session.masterKey, getWorkingData]);
+  }, [api, session.masterKey, getWorkingData, bootRound]);
 
   // A file added on the Evidence page can finish saving after she has already come back to her story (the upload
   // carries on when she leaves that page). Fold its details in when they land, so the file count is right and the next
@@ -130,7 +138,7 @@ export function Story() {
    */
   async function saveToVault(): Promise<void> {
     const a = auto.current;
-    if (a.stopped || onHoldRef.current) return;
+    if (a.stopped || onHoldRef.current || conflictRef.current) return;
     window.clearTimeout(a.timer);
     a.timer = undefined;
     while (a.inFlight) await a.inFlight;
@@ -145,21 +153,27 @@ export function Story() {
     setVaultSave((v) => ({ ...v, phase: 'saving' }));
     const run = (async () => {
       try {
-        const res = await sealPayload(
+        const res = await saveDraftSlot(
           api,
           session.masterKey,
-          { kind: 'draft', draft: w.draft!, evidence: w.evidence, savedAt: new Date().toISOString() },
-          w.savedDraftRecordId,
+          { draft: w.draft!, evidence: w.evidence, ...(escrowedRef.current.length > 0 && { escrowedHashes: escrowedRef.current }) },
+          w.slotSeq ?? 0,
         );
         if (a.stopped) return;
         a.lastJson = json;
         a.lastAt = Date.now();
         a.failures = 0;
-        workingRef.current = { ...(workingRef.current ?? w), savedDraftRecordId: res.record.id };
+        workingRef.current = { ...(workingRef.current ?? w), slotSeq: res.seq };
         await setWorkingData(workingRef.current);
         setVaultSave({ phase: 'saved', at: a.lastAt });
-      } catch {
+      } catch (e) {
         if (a.stopped) return;
+        if (e instanceof SlotConflictError) {
+          conflictRef.current = true;
+          setConflict(true);
+          setVaultSave((v) => ({ ...v, phase: 'idle' }));
+          return;
+        }
         a.failures += 1;
         setVaultSave((v) => ({ ...v, phase: 'error' }));
         scheduleSave(Math.min(5 * 60_000, 30_000 * a.failures)); // "we'll try again"
@@ -178,7 +192,7 @@ export function Story() {
   /** Coalesce: one pending save at a time, a moment after the change and at least a minute after the last save. */
   function scheduleSave(delay?: number) {
     const a = auto.current;
-    if (a.stopped || onHoldRef.current) return;
+    if (a.stopped || onHoldRef.current || conflictRef.current) return;
     if (a.timer !== undefined) {
       if (delay === undefined) return;
       window.clearTimeout(a.timer);
@@ -284,6 +298,7 @@ export function Story() {
     // "Keep writing" only resumes draft saves. Sealing (and lodging match entries) reads the earlier sealed version
     // from this partial vault, so it waits until every saved version opens again.
     if (boot.unreadable > 0) throw new UnreadableVaultError(boot.unreadable);
+    if (conflictRef.current) throw new Error(CONFLICT_SEAL);
     window.clearTimeout(saveTimer.current);
     // No draft autosave while (or after) sealing: the sealed version must be the newest.
     const a = auto.current;
@@ -296,7 +311,7 @@ export function Story() {
         ...intake,
         evidence: mergeEvidence(intake.evidence, workingRef.current?.evidence),
       };
-      let escrowed = boot.previousEscrowed;
+      let escrowed = escrowedRef.current;
       let escrowNote: string | undefined;
       let needsPhone = false;
       // Sealed matching only in a build that has it (MATRA_MATCHING=on); a pilot build never sets escrowOptIn either.
@@ -307,7 +322,7 @@ export function Story() {
             matchingApi(api),
             session.masterKey,
             record,
-            boot.previousEscrowed,
+            escrowedRef.current,
             workingRef.current?.draft ? matchContactOf(workingRef.current.draft) : undefined,
           );
         } catch (e) {
@@ -317,13 +332,23 @@ export function Story() {
         }
       }
       setSealing('Encrypting and sealing your account…');
-      const res = await sealPayload(
-        api,
-        session.masterKey,
-        // the answers are kept too, so she can add to this version later without starting over
-        { kind: 'final', record, draft: workingRef.current?.draft ?? undefined, escrowedHashes: escrowed, savedAt: new Date().toISOString() },
-        boot.previousFinalId,
-      );
+      // Only her account is sealed: what she may later share is exactly {kind, record, savedAt}.
+      const res = await sealPayload(api, session.masterKey, { kind: 'final', record, savedAt: new Date().toISOString() }, boot.previousFinalId);
+      // Her draft slot stays as the starting point for adding to this version later: the same answers, without anything
+      // she hadn't sent, marked with the seal it became.
+      const w = workingRef.current;
+      if (w?.draft) {
+        try {
+          await saveDraftSlot(
+            api,
+            session.masterKey,
+            { draft: withoutUnsent(w.draft), evidence: record.evidence, sealedRecordId: res.record.id, ...(escrowed.length > 0 && { escrowedHashes: escrowed }) },
+            w.slotSeq ?? 0,
+          );
+        } catch {
+          // The seal stands. Her slot keeps the draft it had (another device may have saved since), which she resumes from.
+        }
+      }
       await setWorkingData(null);
       workingRef.current = null;
       setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote, needsPhone });
@@ -332,6 +357,31 @@ export function Story() {
       throw new Error(friendlyError(e));
     } finally {
       setSealing(null);
+    }
+  }
+
+  /** Her choice after a conflict: open the draft saved elsewhere (this page's changes since then are not kept). */
+  async function openNewerDraft() {
+    conflictRef.current = false;
+    setConflict(false);
+    auto.current = { ...auto.current, lastJson: '', lastAt: 0, failures: 0 };
+    workingRef.current = null;
+    await setWorkingData(null);
+    setBoot(null);
+    setBootRound((n) => n + 1);
+  }
+
+  /** Her other choice after a conflict: this page's draft replaces the one saved elsewhere. */
+  async function keepThisDraft() {
+    try {
+      const { seq } = await loadDraftSlot(api, session.masterKey);
+      if (workingRef.current) workingRef.current = { ...workingRef.current, slotSeq: seq };
+      conflictRef.current = false;
+      setConflict(false);
+      auto.current.lastJson = '';
+      await saveToVault();
+    } catch (e) {
+      setBootError(friendlyError(e));
     }
   }
 
@@ -394,6 +444,23 @@ export function Story() {
               </div>
             </div>
           )}
+          {conflict && (
+            <div className="card soft stack" data-testid="story-conflict" role="status">
+              <p className="small" style={{ margin: 0 }}>
+                Your draft was also saved from another device or tab after this page opened, so saving here is paused.
+                You can open that newer draft (what you wrote on this page since then won’t be kept), or keep this page’s
+                version (it replaces the other one).
+              </p>
+              <div className="row">
+                <button type="button" className="btn btn-small" onClick={() => void openNewerDraft()}>
+                  Open the newer draft
+                </button>
+                <button type="button" className="btn btn-small btn-quiet" onClick={() => void keepThisDraft()}>
+                  Keep this page’s version
+                </button>
+              </div>
+            </div>
+          )}
           {boot.hasSealed && (
             <p className="card soft small">
               You already have a sealed account. If you seal again, it’s kept as a new version — the earlier one stays
@@ -402,7 +469,7 @@ export function Story() {
           )}
           {mode === 'space' ? (
             <StorySpace
-              key="space"
+              key={`space-${bootRound}`}
               initialDraft={workingRef.current?.draft ?? boot.working.draft ?? undefined}
               onDraftChange={onDraftChange}
               onComplete={onComplete}
@@ -412,7 +479,7 @@ export function Story() {
               onSwitchToInterview={(d) => switchMode(d, 'interview')}
               onCheckpoint={onCheckpoint}
               hasSealed={boot.hasSealed}
-              saveStatus={onHold ? undefined : statusLine}
+              saveStatus={onHold || conflict ? undefined : statusLine}
             />
           ) : (
             <>
@@ -425,10 +492,10 @@ export function Story() {
                   ← Back to the open story space
                 </button>
               </p>
-              {pastSafety && !onHold && <div className="space-root space-status-row">{statusLine}</div>}
+              {pastSafety && !onHold && !conflict && <div className="space-root space-status-row">{statusLine}</div>}
               {fileCount > 0 && <p className="small muted">{fileCount} evidence file(s) will be attached when you seal.</p>}
               <IntakeChat
-                key="interview"
+                key={`interview-${bootRound}`}
                 initialDraft={workingRef.current?.draft ?? boot.working.draft ?? undefined}
                 onDraftChange={onDraftChange}
                 onComplete={onComplete}

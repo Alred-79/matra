@@ -8,7 +8,7 @@ import { UnreadableNote } from '../components/UnreadableNote';
 import { NOTICES } from '../lib/disclosures';
 import { shareLengthSentence } from '../lib/shareTerms';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
+import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadVault, type OpenedRecord } from '../lib/vault';
 import { MATCH_PINS, attorneyShareable } from '../matchPins';
 
 type Scope = ShareT['scope'][number];
@@ -243,6 +243,9 @@ function Consent({
   const { api, session } = useRequiredSession();
   const fp = check.fingerprint;
   const keyOk = canShare(check);
+  // Only a sealed version that holds nothing but her account is shared (one sealed before draft slots also holds her
+  // working notes): the attorney receives the whole envelope.
+  const legacy = !isCleanFinal(record.payload);
   const evidence = (record.payload.record?.evidence ?? []).filter((e) => e.blobId);
   const [scope, setScope] = useState<Record<Scope, boolean>>({ record: true, evidence: evidence.length > 0, brief: true });
   const [agreed, setAgreed] = useState(false);
@@ -265,7 +268,7 @@ function Consent({
     : '';
 
   async function share() {
-    if (!agreed || !keyOk || !fp || !statement || unreadable > 0) return;
+    if (!agreed || !keyOk || !fp || !statement || unreadable > 0 || legacy) return;
     setBusy(true);
     setError(null);
     try {
@@ -380,8 +383,9 @@ function Consent({
         {busy && <Loading label="Locking your file for this attorney, on your device…" />}
         {error && <ErrorNote>{error}</ErrorNote>}
         <UnreadableNote count={unreadable} />
+        {legacy && <ErrorNote>{LEGACY_FINAL_NOTICE}</ErrorNote>}
         <div className="row">
-          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy || unreadable > 0}>
+          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy || unreadable > 0 || legacy}>
             Yes, share with {attorney.displayName}
           </button>
           <button className="btn" onClick={onCancel} disabled={busy}>

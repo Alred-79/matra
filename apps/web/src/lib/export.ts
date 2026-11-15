@@ -6,6 +6,7 @@
 import type { ApiClient } from '../api/client';
 import { createZip, safeFileName, type ZipEntry } from './zip';
 import { blobKeyFor, loadVault, mergeEvidence, openEvidence } from './vault';
+import { loadDraftSlot } from './draftSlot';
 import { matchingApi } from '../api/matching';
 import { escrowLabel } from './matching';
 
@@ -39,9 +40,12 @@ everything in it. Keep it somewhere safe, and delete it when you no longer need 
 
 What is inside
 --------------
-records.json            Every version of your account and every saved draft, decrypted,
-                        with its vault ID, SHA-256 fingerprint and ledger (timestamp) entry.
-                        Also your preferences (such as the name you asked us to call you).
+records.json            Every sealed version of your account, decrypted, with its vault ID,
+                        SHA-256 fingerprint and ledger (timestamp) entry. Also your preferences
+                        (such as the name you asked us to call you), and any drafts that were
+                        kept as separate versions.
+draft.json              Your current draft (what you are still writing or adding to), decrypted.
+                        It is saved over as you write, so it is the newest copy only.
 evidence/manifest.json  One entry per evidence file: original name, type, size, the SHA-256
                         recorded when you added it, and whether this copy still matches it.
 evidence/...            The evidence files themselves (as stored — with hidden details removed
@@ -56,8 +60,9 @@ To check a file has not changed, compute its SHA-256 and compare it with the man
 
 export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alias: string, now: Date = new Date()): Promise<DataExport> {
   const at = now.toISOString();
-  const [vault, { blobs }, escrow, shares, audit] = await Promise.all([
+  const [vault, slot, { blobs }, escrow, shares, audit] = await Promise.all([
     loadVault(api, masterKey, { includeProfile: true }),
+    loadDraftSlot(api, masterKey),
     api.listBlobs(),
     __MATRA_MATCHING__ ? matchingApi(api).listEscrow().catch(() => ({ entries: [] })) : { entries: [] },
     api.listShares().catch(() => ({ shares: [] })),
@@ -80,7 +85,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     }));
 
   const itemByBlob = new Map(
-    mergeEvidence(...vault.flatMap((r) => [r.payload.evidence, r.payload.record?.evidence]))
+    mergeEvidence(slot.slot?.value.evidence, ...vault.flatMap((r) => [r.payload.evidence, r.payload.record?.evidence]))
       .filter((e) => e.blobId)
       .map((e) => [e.blobId!, e]),
   );
@@ -118,13 +123,25 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
 
   // Saved versions that couldn't be opened are not in records.json: say so in the manifest's problems list too, so this
   // copy is never taken as complete.
-  const unreadableProblem = vault.unreadable > 0
-    ? [`${vault.unreadable} saved version${vault.unreadable === 1 ? '' : 's'} of your space could not be opened and ${vault.unreadable === 1 ? 'is' : 'are'} not in records.json`]
-    : [];
+  const unreadableProblem = [
+    ...(vault.unreadable > 0
+      ? [`${vault.unreadable} saved version${vault.unreadable === 1 ? '' : 's'} of your space could not be opened and ${vault.unreadable === 1 ? 'is' : 'are'} not in records.json`]
+      : []),
+    ...(slot.unreadable ? ['Your current draft could not be opened and is not in draft.json'] : []),
+  ];
   const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n';
   const files: ZipEntry[] = [
     { name: 'README.txt', data: README(alias, at), date: now },
     { name: 'records.json', data: json({ exportedAt: at, alias, records, unreadableRecords: vault.unreadable }), date: now },
+    {
+      name: 'draft.json',
+      data: json({
+        exportedAt: at,
+        draft: slot.slot ? { ...slot.slot.value, savedOnDay: slot.slot.updatedDay, saves: slot.slot.seq } : null,
+        draftUnreadable: slot.unreadable,
+      }),
+      date: now,
+    },
     { name: 'evidence/manifest.json', data: json({ exportedAt: at, files: manifest, problems: [...unreadableProblem, ...problems] }), date: now },
     ...entries,
     ...(__MATRA_MATCHING__ ? [{ name: 'escrow.json', data: json({ exportedAt: at, sealed: escrowLabels }), date: now }] : []),
@@ -136,7 +153,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     fileName: `matra-my-data-${at.slice(0, 10)}.zip`,
     recordCount: records.filter((r) => r.kind !== 'your preferences').length,
     evidenceCount: entries.length,
-    unreadableRecords: vault.unreadable,
+    unreadableRecords: vault.unreadable + (slot.unreadable ? 1 : 0),
     problems,
   };
 }

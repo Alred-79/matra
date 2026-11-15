@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from 'vitest';
-import { deriveKeys, encryptBlob, encryptJSON, generateContentKey, newKdfSalt, sha256Hex, wrapKeyWithMaster } from '@matra/crypto';
+import { deriveKeys, encryptBlob, encryptJSON, generateContentKey, newKdfSalt, sealSlot, sha256Hex, slotName, wrapKeyWithMaster } from '@matra/crypto';
 import type { BlobMeta, VaultRecord } from '@matra/shared';
 import { envelopeHash, type ApiClient } from '../api/client';
 import { MatchingApiClient } from '../api/matching';
@@ -34,8 +34,8 @@ afterEach(() => {
 
 describe('buildDataExport', () => {
   it.each([
-    ['off', false, ['README.txt', 'records.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'shares.json', 'activity.json']],
-    ['on', true, ['README.txt', 'records.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'escrow.json', 'shares.json', 'activity.json']],
+    ['off', false, ['README.txt', 'records.json', 'draft.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'shares.json', 'activity.json']],
+    ['on', true, ['README.txt', 'records.json', 'draft.json', 'evidence/manifest.json', 'evidence/001-wrists.jpg', 'escrow.json', 'shares.json', 'activity.json']],
   ])('decrypts every record and evidence file into one archive, with a verifiable manifest (matching %s)', async (_mode, on, names) => {
     g.__MATRA_MATCHING__ = on;
     const { masterKey } = await deriveKeys('export test passphrase', newKdfSalt(), 1000);
@@ -54,9 +54,12 @@ describe('buildDataExport', () => {
       id: 'r'.repeat(32), ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
       ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(recKey, masterKey),
     };
+    // her draft slot: what she is still adding to
+    const slot = { name: await slotName(masterKey, 'draft'), ...(await sealSlot({ kind: 'draft', slotVersion: 1, draft: { answers: { 'about.name': 'Wren' } }, evidence: [], savedAt: '2026-09-01T00:00:00Z' }, masterKey)), seq: 4, updatedDay: '2026-09-01' };
     const fake = {
       listRecords: async () => ({ records: [rec] }),
       getRecord: async () => ({ record: rec }),
+      getSlot: async () => ({ slot, draftMode: 'slot' }),
       getLedgerEntry: async () => { throw new Error('offline'); },
       listBlobs: async () => ({ blobs: [blob] }),
       downloadBlob: async () => blobCt,
@@ -84,6 +87,9 @@ describe('buildDataExport', () => {
     expect(manifest.files[0]).toMatchObject({ fileName: 'wrists.jpg', sha256: photoSha, sha256Matches: true });
     expect(manifest.problems).toEqual([]);
     expect(records.unreadableRecords).toBe(0);
+    const draft = JSON.parse(new TextDecoder().decode(files.get('draft.json')));
+    expect(draft.draft).toMatchObject({ kind: 'draft', draft: { answers: { 'about.name': 'Wren' } }, savedAt: '2026-09-01T00:00:00Z', savedOnDay: '2026-09-01', saves: 4 });
+    expect(readme).toMatch(/draft\.json\s+Your current draft/);
   });
 
   it('says in the manifest and the result when saved versions could not be opened (never a silently partial copy)', async () => {
@@ -103,6 +109,7 @@ describe('buildDataExport', () => {
         return { record: rec };
       },
       getLedgerEntry: async () => { throw new Error('offline'); },
+      getSlot: async () => ({ slot: null, draftMode: 'slot' }),
       listBlobs: async () => ({ blobs: [] }),
       listEscrow: async () => ({ entries: [] }),
       listShares: async () => ({ shares: [] }),

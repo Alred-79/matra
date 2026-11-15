@@ -21,6 +21,8 @@ When a survivor deletes her records (account deletion), what spoliation and N.J.
 
 Founder (2026-11-11): edits create a new version; she can withdraw or delete at any point, and should delete only information she thinks is wrong or harmful. Point for counsel: deleting a version after she anticipates litigation, or after release to a lawyer, is where spoliation risk is highest.
 
+Drafts (since `p1/vault-foundation`, 2026-11): a sealed account is still a new, kept version, but her unsealed draft is now one encrypted copy saved over as she writes (no ledger entry), so earlier wording of a draft is not kept. A setting, `MATRA_DRAFT_MODE=keep-versions`, keeps every draft save instead, as before. Point for counsel: which one should a real-data pilot launch with, and does overwriting a draft raise the same timing questions as deleting a version? ([SECURITY_WHITEPAPER.md §4b](../../SECURITY_WHITEPAPER.md#4b-draft-slots-her-draft-saved-over-as-she-writes))
+
 ## Research
 
 <!-- Researchers only. Rules, cases, opinions, with pinpoint citations and links to primary sources.

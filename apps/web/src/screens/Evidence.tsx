@@ -11,16 +11,16 @@ import { friendlyError, useRequiredSession } from '../lib/session';
 import {
   blobKeyFor,
   formatBytes,
-  latestOf,
+  legacyDraftEvidence,
   loadVault,
   mergeEvidence,
   openEvidence,
   resumeFrom,
-  sealPayload,
   shortHash,
   UnreadableVaultError,
   uploadEvidence,
 } from '../lib/vault';
+import { SlotConflictError, loadDraftSlot, saveDraftSlot } from '../lib/draftSlot';
 
 interface Uploaded {
   item: EvidenceItem;
@@ -66,20 +66,25 @@ export function Evidence() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const loadExisting = useCallback(async () => {
-    const [vault, { blobs }, mem] = await Promise.all([loadVault(api, session.masterKey), api.listBlobs(), getWorkingData()]);
-    const draft = latestOf(vault, 'draft');
-    const final = latestOf(vault, 'final');
-    const meta = mergeEvidence(draft?.payload.evidence, final?.payload.record?.evidence, mem?.evidence);
-    const resume = resumeFrom(vault);
+    const [vault, { blobs }, mem, slot] = await Promise.all([
+      loadVault(api, session.masterKey),
+      api.listBlobs(),
+      getWorkingData(),
+      loadDraftSlot(api, session.masterKey),
+    ]);
+    const resume = resumeFrom(slot.slot, vault);
+    const final = resume.final;
+    const meta = mergeEvidence(legacyDraftEvidence(vault), resume.evidence, final?.payload.record?.evidence, mem?.evidence);
     return {
       blobs,
       meta,
-      vaultDraft: draft,
       resumeDraft: resume.draft,
-      resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.draftRecord?.payload.evidence),
+      resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.evidence),
+      escrowedHashes: resume.escrowedHashes,
+      slotSeq: slot.seq,
       inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
-      /** saved versions that couldn't be opened: resumeDraft may be older than her newest draft */
-      unreadable: vault.unreadable,
+      /** saved versions (or her draft slot) that couldn't be opened: resumeDraft may be older than her newest draft */
+      unreadable: vault.unreadable + (slot.unreadable ? 1 : 0),
     };
   }, [api, session.masterKey, getWorkingData]);
   const existing = useAsync(loadExisting, [loadExisting]);
@@ -105,8 +110,8 @@ export function Evidence() {
       }
     }
     if (!added.length) return;
-    // Attach to the in-progress account (in memory) and persist the metadata in a vault draft,
-    // so file names/hashes survive sign-out.
+    // Attach to the in-progress account (in memory) and save the details in her draft slot, so file names and hashes
+    // survive sign-out.
     try {
       const mem = await getWorkingData();
       // If she chose a file before her space finished opening, open it now: otherwise her story would be saved over
@@ -119,20 +124,27 @@ export function Evidence() {
         await setWorkingData({
           draft: mem?.draft ?? null,
           evidence: mergeEvidence(mem?.evidence, added),
-          ...(mem?.savedDraftRecordId && { savedDraftRecordId: mem.savedDraftRecordId }),
+          ...(mem?.slotSeq !== undefined && { slotSeq: mem.slotSeq }),
         });
         throw new UnreadableVaultError(ex.unreadable);
       }
-      const vaultDraft = ex.vaultDraft;
       const draft = mem?.draft ?? ex.resumeDraft ?? emptyDraft();
       const evidence = mergeEvidence(ex.resumeEvidence, mem?.evidence, added);
-      const res = await sealPayload(
-        api,
-        session.masterKey,
-        { kind: 'draft', draft, evidence, savedAt: new Date().toISOString() },
-        mem?.savedDraftRecordId ?? vaultDraft?.meta.id,
-      );
-      await setWorkingData({ draft, evidence, savedDraftRecordId: res.record.id });
+      try {
+        const res = await saveDraftSlot(
+          api,
+          session.masterKey,
+          { draft, evidence, ...(ex.escrowedHashes.length > 0 && { escrowedHashes: ex.escrowedHashes }) },
+          mem?.draft ? (mem.slotSeq ?? ex.slotSeq) : ex.slotSeq,
+        );
+        await setWorkingData({ draft, evidence, slotSeq: res.seq });
+      } catch (e) {
+        // Her draft was saved from another device or tab since: keep the files' details in memory (My story folds them
+        // in and asks her which draft to keep) rather than saving this draft over that one.
+        if (e instanceof SlotConflictError)
+          await setWorkingData({ draft: mem?.draft ?? null, evidence: mergeEvidence(mem?.evidence, added), ...(mem?.slotSeq !== undefined && { slotSeq: mem.slotSeq }) });
+        throw e;
+      }
       setPersistMsg('Saved to your space and added to your draft story.');
       void existing.reload();
     } catch (e) {

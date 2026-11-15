@@ -18,7 +18,7 @@ import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../componen
 import { UnreadableNote } from '../components/UnreadableNote';
 import { REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
 import { friendlyError } from '../lib/session';
-import { blobKeyFor, finals, loadVault } from '../lib/vault';
+import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadVault } from '../lib/vault';
 import { MATCH_PINS } from '../matchPins';
 import { escrowLabel, useMatchingSession } from '../lib/matching';
 import type { MatchingApiClient } from '../api/matching';
@@ -56,8 +56,10 @@ export function ReportRequest() {
       entry ? escrowLabel(entry.labelEnvelope, session.masterKey) : Promise.resolve(undefined),
     ]);
     const current = finals(records).find((r) => !r.supersededBy);
-    // saved versions that couldn't be opened: `current` may be older than her newest sealed account, so sharing stays off
-    return { req, fingerprint, vouched, label, current, unreadable: records.unreadable };
+    // saved versions that couldn't be opened: `current` may be older than her newest sealed account, so sharing stays off.
+    // A version sealed before draft slots also holds her working notes, and the counselor would receive the whole
+    // envelope: it is never released (`legacy`).
+    return { req, fingerprint, vouched, label, current, unreadable: records.unreadable, legacy: !!current && !isCleanFinal(current.payload) };
   }, [api, id, session.masterKey]);
   const [withEvidence, setWithEvidence] = useState(false);
   const [fpConfirmed, setFpConfirmed] = useState(false);
@@ -95,7 +97,7 @@ export function ReportRequest() {
   }
 
   async function share() {
-    if (!d || !req || !d.current || !keyOk || !agreed || d.unreadable > 0) return;
+    if (!d || !req || !d.current || !keyOk || !agreed || d.unreadable > 0 || d.legacy) return;
     const record = d.current;
     const blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }> = [];
     if (withEvidence && evidence.length) {
@@ -215,6 +217,7 @@ export function ReportRequest() {
                 </ul>
               </section>
               <UnreadableNote count={d.unreadable} />
+              {d.legacy && <ErrorNote>{LEGACY_FINAL_NOTICE}</ErrorNote>}
               {!d.current ? (
                 <div className="card stack">
                   <p style={{ margin: 0 }}>
@@ -285,7 +288,7 @@ export function ReportRequest() {
                 {d.current && (
                   <button
                     className="btn btn-primary"
-                    disabled={!keyOk || !agreed || !!st.busy || d.unreadable > 0}
+                    disabled={!keyOk || !agreed || !!st.busy || d.unreadable > 0 || d.legacy}
                     onClick={() => void act('yes', share, 'Locking your report for this counselor, on your device…')}
                   >
                     Yes, share my report

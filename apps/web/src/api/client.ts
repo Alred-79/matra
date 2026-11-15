@@ -17,6 +17,9 @@ import type {
   CreateRecordRequest,
   CreateRecordResponse,
   CreateShareRequest,
+  GetSlotResponse,
+  PutSlotRequest,
+  PutSlotResponse,
   Envelope,
   LedgerEntry,
   LedgerProofRequest,
@@ -164,6 +167,16 @@ export class ApiClient {
   }
   getRecord(id: string) {
     return this.json<{ record: VaultRecord }>('GET', `/api/vault/records/${encodeURIComponent(id)}`);
+  }
+  /** Draft slots (lib/draftSlot.ts): `name` is her opaque slot name (packages/crypto slotName). */
+  getSlot(name: string) {
+    return this.json<GetSlotResponse>('GET', `/api/vault/slots/${encodeURIComponent(name)}`);
+  }
+  putSlot(name: string, req: PutSlotRequest) {
+    return this.json<PutSlotResponse>('PUT', `/api/vault/slots/${encodeURIComponent(name)}`, req);
+  }
+  deleteSlot(name: string, expectedSeq?: number) {
+    return this.json<{ ok: true }>('DELETE', `/api/vault/slots/${encodeURIComponent(name)}`, expectedSeq === undefined ? {} : { expectedSeq });
   }
   async uploadBlob(ciphertext: Uint8Array, ownerWrappedKey: WrappedKey): Promise<CreateBlobResponse> {
     const res = await this.raw('POST', '/api/vault/blobs', {

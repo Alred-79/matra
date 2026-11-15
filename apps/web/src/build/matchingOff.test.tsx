@@ -38,6 +38,7 @@ function recordingServer() {
     if (MATCHING_ROUTES.test(url.pathname)) return json(404, { error: 'Sealed matching isn’t part of this service.', code: 'matching_disabled' });
     if (url.pathname === '/api/vault/records') return json(200, { records: [] });
     if (url.pathname === '/api/vault/blobs') return json(200, { blobs: [] });
+    if (url.pathname.startsWith('/api/vault/slots/')) return json(200, { slot: null, draftMode: 'slot' });
     if (url.pathname === '/api/shares') return json(200, { shares: [] });
     if (url.pathname === '/api/attorneys') return json(200, { attorneys: [] });
     if (url.pathname === '/api/audit') return json(200, { events: [] });

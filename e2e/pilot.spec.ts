@@ -118,6 +118,36 @@ test('pilot 2. she writes, names him with a phone and a handle, seals and shares
   // The survivor's whole session never asked for a matching route (a sealed match, a phone check, report requests).
   expect(api.filter((a) => MATCHING_ROUTE.test(a))).toEqual([]);
   expect(api).toEqual(expect.arrayContaining(['POST /api/vault/records', 'POST /api/shares']));
+  // Her draft autosaved to its slot (saved over in place); the only new record was the seal.
+  expect(api.filter((a) => a === 'POST /api/vault/records')).toHaveLength(1);
+  expect(api.filter((a) => /^PUT \/api\/vault\/slots\/[0-9a-f]{64}$/.test(a)).length).toBeGreaterThan(0);
+});
+
+test('pilot 2b. she signs in again and adds to her sealed version: it opens where she left it, and only the seal is ledgered', async ({ page, request }) => {
+  const head = async () => ((await (await request.get('/api/ledger/head')).json()) as { seq: number }).seq;
+  const api = recordApi(page);
+  await signIn(page, ALIAS, SURVIVOR_PASS);
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  // her words are there (resumed from her draft slot, which sealing kept), and no safety question again
+  await expect(page.locator('.space-journal .space-entry-text').first()).toHaveText(NARRATIVE);
+  const before = await head();
+  await addToStory(page, 'Later I remembered the music was very loud.');
+  await expect(page.getByTestId('vault-status')).toContainText('Saved to your private space', { timeout: 30_000 });
+  // an autosave is a slot write: no record, no ledger entry
+  expect(await head()).toBe(before);
+  expect(api.filter((a) => a === 'POST /api/vault/records')).toHaveLength(0);
+
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await expect(page.getByTestId('notice-saved-versions')).toContainText('Sealed versions are kept');
+  await sealFromReview(page);
+  expect(await head()).toBe(before + 1);
+  expect(api.filter((a) => a === 'POST /api/vault/records')).toHaveLength(1);
+  await nav(page, 'Home');
+  const acct = page.getByTestId('home-story');
+  await expect(acct.getByTestId('sealed-current')).toBeVisible({ timeout: 60_000 });
+  await expect(acct.getByTestId('sealed-earlier')).toHaveCount(1);
+  await signOut(page);
 });
 
 test('pilot 3. the attorney opens and verifies what she shared', async ({ page }) => {

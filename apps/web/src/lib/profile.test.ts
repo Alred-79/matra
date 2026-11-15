@@ -1,3 +1,4 @@
+import { draftToRecord, emptyDraft } from '../intake';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_KDF_ITERATIONS, deriveKeys, newKdfSalt } from '@matra/crypto';
 import type { ApiClient } from '../api/client';
@@ -42,7 +43,7 @@ describe('encrypted profile (preferred name)', () => {
     const first = await saveProfile(api, masterKey, { preferredName: '  Maya  ' });
     expect(first.profile.preferredName).toBe('Maya');
     const second = await saveProfile(api, masterKey, { preferredName: 'Mae' }, first.recordId);
-    await sealPayload(api, masterKey, { kind: 'draft', savedAt: new Date().toISOString() });
+    await sealPayload(api, masterKey, { kind: 'final', record: draftToRecord(emptyDraft()), savedAt: new Date().toISOString() });
 
     const got = await getProfile(api, masterKey);
     expect(got?.profile.preferredName).toBe('Mae');
@@ -51,7 +52,7 @@ describe('encrypted profile (preferred name)', () => {
     for (const body of sent) expect(body).not.toMatch(/Maya|Mae/);
 
     const vault = await loadVault(api, masterKey, { withLedger: false });
-    expect(vault.map((r) => r.payload.kind)).toEqual(['draft']);
+    expect(vault.map((r) => r.payload.kind)).toEqual(['final']);
 
     // an empty name clears it
     const cleared = await saveProfile(api, masterKey, { preferredName: '  ' }, second.recordId);

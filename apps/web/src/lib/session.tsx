@@ -48,8 +48,8 @@ export interface Session {
 export interface WorkingData {
   draft: IntakeDraft | null;
   evidence: EvidenceItem[];
-  /** id of the vault draft record this was loaded from / last saved as (for `supersedes`) */
-  savedDraftRecordId?: string;
+  /** seq of her draft slot this was loaded from / last saved as (a save must name it: lib/draftSlot.ts) */
+  slotSeq?: number;
 }
 
 export type Progress = 'deriving' | 'generating' | 'contacting' | 'unlocking';

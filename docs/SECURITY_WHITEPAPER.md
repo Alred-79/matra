@@ -33,6 +33,8 @@
  │  • strip image EXIF/GPS       │                  │ matching: tag π + sealed shares │
  │  • PDF brief generated locally│◄─────────────────┤ ledger: append-only hash chain  │
  └───────────────────────────────┘   ciphertext     │ audit_events: per-user log      │
+                                                    │ draft slots (own file): one     │
+                                                    │   overwritable ciphertext each  │
                                                     └─────────────────────────────────┘
  Attorney browser: same crypto library; decrypts only what was re-wrapped to its RSA key.
  Counselor browser: same library; opens only MATCHED sealed-match groups (section 4a).
@@ -64,6 +66,8 @@
                                                  │ unwraps wrapped_account_key (server)
                                                  ▼
                     account secret AS (64 bytes) = masterKey bytes (32) ‖ matchKey bytes (32)
+                    (either version) HKDF-SHA256(AS, info="matra/slot-name/v1") ──► slotNameKey (HMAC-SHA256,
+                                                 non-extractable; names her draft slots opaquely, section 4b)
                                                  ▲
                                                  │ unwraps recovery_wrapped_key (server)
  recovery code (16 random bytes, shown once) ──HKDF-SHA256(salt="matra/recovery/v1")──┬─ "kek"  ──► KEK_rec
@@ -73,7 +77,8 @@
  masterKey (either version)
              ├── wraps ► RSA-OAEP-3072 (SHA-256) identity private key  (stored wrapped on server)
              ├── wraps ► per-record content key  K_r  (AES-256-GCM, random)  ──► record ciphertext
-             └── wraps ► per-blob content key    K_b  (AES-256-GCM, random)  ──► evidence ciphertext
+             ├── wraps ► per-blob content key    K_b  (AES-256-GCM, random)  ──► evidence ciphertext
+             └── wraps ► per-save slot key       K_s  (AES-256-GCM, random)  ──► draft-slot ciphertext
 
  Sharing with attorney A:  K_r, K_b  ──RSA-OAEP(A.publicKey)──► recipient-wrapped keys (server)
  Attorney decrypts: A.passphrase → A.masterKey → A.RSA private key → K_r, K_b → plaintext
@@ -111,7 +116,7 @@
 ```
 - SQLite triggers reject any `UPDATE` or `DELETE` on the ledger, and reject any `INSERT` that does not extend the chain (`seq = max+1`, `prevHash = head`). Records are immutable. A correction is a new row with `supersedes`.
 - `GET /api/ledger/verify` recomputes the chain on the server. The brief PDF prints ledger entry IDs and hashes, and carries them machine-readably (`/MatraVerification` in its document info), so a third party can re-check them **in the browser** on the public **Check a file** page (`/verify`): files are hashed locally, only the record ciphertext hash is sent to `POST /api/ledger/proof`, and the client recomputes the returned entry and checks that the bare chain links (`seq`, `prevHash`, `entryHash`) connect to the head (`packages/crypto/src/ledger.ts`). The attorney's case view runs the same checks on the account it decrypts and on each evidence ciphertext. The proof lookup answers only exact 64-hex hashes of `record.sealed` / `blob.sealed` entries, never ranges, prefixes or ids, and is rate-limited per client with the daily-salted in-memory key (threat model W22).
-- Account deletion needs her passphrase again (its auth key, checked like a sign-in; a session alone is refused) and deletes the account's rows from the live database: ciphertext, wrapped keys, shares, sealed-match entries and OPRF quota rows, audit. `secure_delete` is on, so freed pages are overwritten, and a `wal_checkpoint(TRUNCATE)` afterwards empties the WAL. **It is not a crypto-shred:** her keys are wrapped under keys derived from her passphrase (and her recovery code, if she had one), not under a server key that could be destroyed, so any backup or copy of the database made before the deletion still holds her ciphertext and wrapped keys, and opens with her passphrase. Ledger rows (IDs, hashes, timestamps) remain, and an `account.shredded` entry is appended (the ledger type keeps its original name).
+- Account deletion needs her passphrase again (its auth key, checked like a sign-in; a session alone is refused) and deletes the account's rows from the live database: ciphertext, wrapped keys, shares, sealed-match entries and OPRF quota rows, audit. Her draft slots (section 4b) are deleted from their own file right after, with a TRUNCATE checkpoint there too; slots left without an account (a crash between the two files) are removed at the next start. `secure_delete` is on, so freed pages are overwritten, and a `wal_checkpoint(TRUNCATE)` afterwards empties the WAL. **It is not a crypto-shred:** her keys are wrapped under keys derived from her passphrase (and her recovery code, if she had one), not under a server key that could be destroyed, so any backup or copy of the database made before the deletion still holds her ciphertext and wrapped keys, and opens with her passphrase. Ledger rows (IDs, hashes, timestamps) remain, and an `account.shredded` entry is appended (the ledger type keeps its original name).
 - Sealed matching writes exactly **one** ledger entry per submission (`escrow.sealed`, hashing the random contact-bundle ciphertext, never the matching tag). There is deliberately **no `escrow.matched` entry**: writing one at match time would let anyone watching `GET /api/ledger/head` see the sequence number jump after a submission and infer a match. The match time is kept only in the database (`match_groups.matched_at`). Withdrawals write no ledger entry.
 
 **What the ledger proves, and what it does not**
@@ -440,6 +445,20 @@ phone hashes with counts (no account id; linkable by time together with the SMS 
 
 ---
 
+## 4b. Draft slots (her draft, saved over as she writes)
+
+Her draft is not a record. Autosave, the Evidence page and (with sealed matching on) the list of identifiers already sealed write one encrypted **draft slot**, which each save replaces. Only sealing writes a record and a ledger entry. Code: `apps/server/src/slots.ts`, `packages/crypto/src/slots.ts`, `apps/web/src/lib/draftSlot.ts`.
+
+- **Storage.** A separate SQLite file beside the main database (`<name>-drafts.db`, or `MATRA_DRAFTS_DB_PATH`). One row per (account, slot name): `envelope`, `wrapped_key`, `seq`, `updated_day`. No ledger entry, no WORM trigger, no audit row. Survivors only.
+- **Opaque names.** The name is hex `HMAC-SHA256(slotNameKey, "matra/slot/v1|" + label)`, with `slotNameKey` derived from her account secret (section 3), so the server can't tell "draft" from a later slot such as an expense log. Key versions 1 and 2 give the same names.
+- **Padding and time.** Her device pads the JSON with trailing spaces so that ciphertext plus tag is a whole number of 16 KiB; the server refuses anything else (and anything over 3 MiB). The only time stored is the UTC day of the last write. The server still sees which slots an account has, how many times each was written (`seq`), and when requests arrive.
+- **Compare-and-swap.** A write names the `seq` it read (0 for a new slot). A stale write gets `409 slot_conflict` and changes nothing: two devices never overwrite each other silently, and her app asks which draft to keep.
+- **Overwritten copies.** `secure_delete` is on and every write ends with `wal_checkpoint(TRUNCATE)` (`journal_size_limit` 0), so neither the file's free pages nor its WAL keep an earlier version once a write returns. A copy can still survive in freed filesystem blocks, in a snapshot, or in a backup taken before the overwrite.
+- **Sealing.** The sealed record's plaintext is exactly `{kind: 'final', record, savedAt}`: no draft, no unsent text, no matching fingerprints (`lib/vault.ts sealPayload` builds it field by field). That matters because sharing with an attorney, or releasing to a counselor, hands over the whole envelope. After the seal, her app writes the slot once more, without unsent text and marked with the sealed record's id, so she can add to that version later. Versions sealed before draft slots may also hold her draft and fingerprints; they stay (WORM), are never shared or released (the app asks her to seal again), and drafts saved as records before slots are no longer shown as versions.
+- **`MATRA_DRAFT_MODE`.** `slot` (default) is the above. `keep-versions` also files every slot write as a record with a `record.sealed` ledger entry, so every earlier draft is kept until she deletes her account (how every autosave worked before slots). Which mode launches is for counsel (Q-004); her app's notices say which one is running.
+
+---
+
 ## 5. Threat model
 
 Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protected.
@@ -494,7 +513,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 - "If you forget your passphrase, we can't recover your information. If you made a recovery code, it lets you set a new passphrase. Only you have it: anyone who has it and knows your alias could get into your account, so keep it somewhere only you can reach. Without one, nobody can recover your information. Not us, not anyone."
 - "A court can order **you** to share your records. We can't be forced to, because we can't open them."
 - "Anything you give police will be shared with the defense."
-- "Every saved version is kept. If you're ever asked to hand over your records, that can include earlier versions."
+- "Each time you seal your story, it's kept as a new version, and earlier sealed versions are kept too. While you write, your draft is saved over as you go, so only your newest draft is kept. If you are ever asked to hand over your records, that can include every sealed version." (With `MATRA_DRAFT_MODE=keep-versions` instead: "Every saved version is kept. If you're ever asked to hand over your records, that can include earlier versions." Section 4b.)
 - "Matra knows that your account exists and when you used it. It doesn't know what you wrote."
 - "When you share with a lawyer, they can read and save what you shared. Turning off sharing stops new access, but it can't erase what they already saved."
 - "If someone controls your phone or computer, they may be able to see what you do. Use a safe device."

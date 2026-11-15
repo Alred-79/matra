@@ -19,6 +19,8 @@ export function fakeAuthFetch({ deleteFails = false }: { deleteFails?: boolean }
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://x');
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    // no draft slot yet (lib/draftSlot.ts)
+    if (url.pathname.startsWith('/api/vault/slots/') && (init?.method ?? 'GET') === 'GET') return json(200, { slot: null, draftMode: 'slot' });
     switch (`${init?.method ?? 'GET'} ${url.pathname}`) {
       case 'POST /api/auth/register': {
         users.set(body.username, body);

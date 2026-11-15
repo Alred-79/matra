@@ -8,6 +8,8 @@
  * Never say "subpoena-proof", "bulletproof", "admissible" or "tamper-proof".
  */
 
+import type { DraftMode } from '@matra/shared';
+
 export interface Notice {
   id: string;
   title: string;
@@ -36,7 +38,10 @@ export const NOTICES = {
     ],
   },
 
-  /** When a version is saved or sealed (Memo §2 "Drafts and versions"). */
+  /**
+   * At review/seal, when every draft save is ALSO kept as a version (MATRA_DRAFT_MODE=keep-versions; Memo §2 "Drafts and
+   * versions"). Use savedVersionsNotice(mode), which picks this one or sealedVersions.
+   */
   savedVersions: {
     id: 'saved-versions',
     title: 'Every saved version is kept',
@@ -47,6 +52,22 @@ export const NOTICES = {
     more: [
       'Memories after something like this often come back in pieces, or in a different order. That’s normal.',
       'Keeping every version shows when you wrote what, and that nothing was changed later. Earlier versions stay in your space until you delete your account.',
+      NOT_ADVICE,
+    ],
+  },
+
+  /** At review/seal, when her draft is saved over as she writes (MATRA_DRAFT_MODE=slot, the default). */
+  sealedVersions: {
+    id: 'saved-versions',
+    title: 'Sealed versions are kept',
+    body: [
+      'Each time you seal your story, it’s kept as a new version, and earlier sealed versions are kept too.',
+      'While you write, your draft is saved over as you go, so only your newest draft is kept.',
+      'If you are ever asked to hand over your records, that can include every sealed version.',
+    ],
+    more: [
+      'Memories after something like this often come back in pieces, or in a different order. That’s normal.',
+      'Keeping every sealed version shows when you sealed what, and that nothing was changed later. Sealed versions stay in your space until you delete your account.',
       NOT_ADVICE,
     ],
   },
@@ -176,4 +197,9 @@ export function buildReportConsentStatement(p: {
     `Access ends after ${p.expiresInDays} days unless I stop it sooner. Stopping ends future access, but it can’t take back what was already read.`,
     `Agreed at ${p.at}.`,
   ].join('\n');
+}
+
+/** The review/seal notice that is true for this server's MATRA_DRAFT_MODE (lib/draftSlot.ts useDraftMode). */
+export function savedVersionsNotice(mode: DraftMode): Notice {
+  return mode === 'keep-versions' ? NOTICES.savedVersions : NOTICES.sealedVersions;
 }

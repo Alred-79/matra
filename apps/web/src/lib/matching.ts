@@ -22,6 +22,7 @@ import { mirror } from '../dev/mirror';
 import { MATCHING_CONSENT_LINES } from './disclosures';
 import { useRequiredSession } from './session';
 import * as vault from './vault';
+import { UnreadableDraftError, loadDraftSlot, updateDraftSlot } from './draftSlot';
 
 const ESCROW_KIND_LABEL: Record<string, string> = {
   email: 'email',
@@ -117,8 +118,8 @@ export async function hasUnsealedMatches(record: IntakeRecord | undefined, alrea
 
 /**
  * Seal every opted-in perpetrator identifier for sealed matching (Callisto-style; see packages/crypto/src/matching.ts).
- * Names are never used. Returns the local fingerprints sealed so far (store them in the 'final' payload as
- * `escrowedHashes` — they are only ever kept encrypted in her own vault).
+ * Names are never used. Returns the local fingerprints sealed so far (keep them in her draft slot as `escrowedHashes`,
+ * lib/draftSlot.ts: encrypted in her own vault, and never in a sealed record she may share).
  *
  * `opts.contact` is how a legal options counselor may reach her if there is a match; without it, her safe-contact
  * details from the record are used. With neither, nothing is sealed and a MatchingError explains why.
@@ -246,23 +247,28 @@ export async function lodgeMatches(
 
 /**
  * After she confirms a phone number (counselor/PhoneVerify.tsx): seal the identifiers her current sealed record chose
- * for a sealed match but that could not be sealed yet. If anything new was sealed, her record is saved again as a new
- * sealed version (same story; only the list of sealed fingerprints changes), so a later re-seal never resubmits — or
- * undoes the withdrawal of — an identifier. Returns how many identifiers were newly sealed.
+ * for a sealed match but that could not be sealed yet. The fingerprints of what is now sealed go into her draft slot
+ * (never into a sealed record, which she may share), so a later re-seal never resubmits, or undoes the withdrawal of,
+ * an identifier. Returns how many identifiers were newly sealed.
  */
 export async function retrySealedMatches(api: MatchingApiClient, masterKey: CryptoKey): Promise<number> {
-  const opened = await vault.loadVault(api, masterKey, { withLedger: false });
-  // Some saved versions couldn't be opened: the "latest" sealed one here may be older than hers, and re-sealing from it
-  // would save that older version as the newest. Do nothing; the caller shows that it couldn't be set up right now.
+  const [opened, slot] = await Promise.all([vault.loadVault(api, masterKey, { withLedger: false }), loadDraftSlot(api, masterKey)]);
+  // Some saved versions couldn't be opened: the "latest" sealed one here may be older than hers, and matching from it
+  // could seal what she has since taken out. Do nothing; the caller shows that it couldn't be set up right now.
   if (opened.unreadable > 0) throw new vault.UnreadableVaultError(opened.unreadable);
-  const final = vault.latestOf(opened, 'final');
-  const record = final?.payload.record;
-  const before = final?.payload.escrowedHashes ?? [];
-  if (!final || !record || !(await hasUnsealedMatches(record, before))) return 0;
-  const draft = final.payload.draft;
-  const after = await lodgeMatches(api, masterKey, record, before, draft ? matchContactOf(draft) : undefined);
+  if (slot.unreadable) throw new UnreadableDraftError();
+  const resume = vault.resumeFrom(slot.slot, opened);
+  const record = resume.final?.payload.record;
+  const before = resume.escrowedHashes;
+  if (!record || !(await hasUnsealedMatches(record, before))) return 0;
+  const after = await lodgeMatches(api, masterKey, record, before, resume.draft ? matchContactOf(resume.draft) : undefined);
   const added = after.filter((h) => !before.includes(h)).length;
-  if (added) await vault.sealPayload(api, masterKey, { ...final.payload, escrowedHashes: after, savedAt: new Date().toISOString() }, final.meta.id);
+  if (added)
+    await updateDraftSlot(api, masterKey, (cur) => ({
+      // only the fingerprints change: her draft (or, with no slot yet, the answers she resumed from) stays as it is
+      ...(cur ?? { draft: resume.draft, evidence: resume.evidence }),
+      escrowedHashes: Array.from(new Set([...(cur?.escrowedHashes ?? []), ...after])),
+    }));
   return added;
 }
 

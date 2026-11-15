@@ -219,7 +219,8 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
   await expect(review).toBeVisible();
   expect(await review.locator('.space-review-entry .space-verbatim').first().textContent()).toBe(NARRATIVE);
   await expect(review.getByText('Skipped', { exact: true }).first()).toBeVisible();
-  await expect(review.getByTestId('notice-saved-versions')).toContainText('Every saved version is kept');
+  // her draft is saved over as she writes (MATRA_DRAFT_MODE=slot): only sealed versions are kept, and it says so
+  await expect(review.getByTestId('notice-saved-versions')).toContainText('Sealed versions are kept');
   await shot(page, '05-review');
 
   await sealFromReview(page);
@@ -239,10 +240,10 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
   await nav(page, 'Home');
   const acct = page.getByTestId('home-story');
   await expect(acct.getByText('Current sealed version')).toBeVisible({ timeout: 60_000 });
-  // Turning the sealed match on saved her record again as a new sealed version (only the list of sealed fingerprints
-  // changed), so the first seal is now listed as an earlier version; both verify.
+  // Turning the sealed match on kept the list of sealed fingerprints in her draft slot, not in a new sealed version
+  // (a sealed version holds only her account), so there is still one sealed version, and it verifies.
   await expect(acct.getByTestId('sealed-current').getByText('Verified ✓')).toBeVisible();
-  await expect(acct.getByTestId('sealed-earlier').getByText('Verified ✓')).toBeVisible();
+  await expect(acct.getByTestId('sealed-earlier')).toHaveCount(0);
   await expect(acct.getByTestId('sealed-current').getByText(/ledger entry #\d+/)).toBeVisible();
   const escrow = page.getByTestId('home-escrow');
   // phone + handle; a bare initial ("R.") is too weak to seal
