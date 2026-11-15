@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { DEFAULT_KDF_ITERATIONS, deriveKeys, generateIdentity, newKdfSalt } from '@matra/crypto';
 import type { AuthResponse, RegisterRequest } from '@matra/shared';
 import { createApp, getDb } from './app.js';
-import { loadMatchingSettings, loadOprfThreshold, loadPepper, resolveDbPath } from './config.js';
+import { loadMatchingSettings, loadOprfThreshold, loadPepper, resolveDbPath, resolveDraftsDbPath } from './config.js';
 import { loadMatchingMode } from './matching-off.js';
 
 const ATTORNEY_PASSPHRASE = 'demo-attorney-passphrase';
@@ -74,7 +74,7 @@ async function main() {
   // Counselors exist only for sealed matching: with MATRA_MATCHING=off (the pilot default) none are seeded.
   const matchingOn = loadMatchingMode() === 'on';
   const counselors = matchingOn ? COUNSELORS : [];
-  const app = createApp({ dbPath, pepper: loadPepper(), matching: matchingOn && { oprf: loadOprfThreshold(), ...loadMatchingSettings() } });
+  const app = createApp({ dbPath, draftsDbPath: resolveDraftsDbPath(dbPath), pepper: loadPepper(), matching: matchingOn && { oprf: loadOprfThreshold(), ...loadMatchingSettings() } });
   const db = getDb(app);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((r) => server.once('listening', () => r()));

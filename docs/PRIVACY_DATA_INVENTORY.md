@@ -1,7 +1,7 @@
 # Privacy data inventory
 
 Every piece of data Matra's own code keeps, where it lives, why, and for how long. Threat model:
-[threat-model.md](threat-model.md) §2 and W11. Code: `apps/server/src/db.ts` (app DB), `apps/server/src/privacy.ts`
+[threat-model.md](threat-model.md) §2 and W11. Code: `apps/server/src/db.ts` (app DB), `apps/server/src/slots.ts` (draft slots), `apps/server/src/privacy.ts`
 (IP handling, request logs), `apps/matcher/src/store.ts` (matcher DB), `apps/server/src/db.ts openHolderDb` (key
 holders). Keep this file in step with the schema: a new column needs a row here.
 
@@ -66,7 +66,7 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 | Column | What / why | Retention |
 |---|---|---|
 | id, owner_id, supersedes | which account, which version | account |
-| envelope / data | ciphertext of her record / evidence file | account |
+| envelope / data | ciphertext of her record / evidence file. A record is a sealed version (`{kind, record, savedAt}`) or her preferences; with `MATRA_DRAFT_MODE=keep-versions`, also a copy of every draft save (§1a) | account |
 | owner_wrapped_key | content key wrapped under her master key | account |
 | content_hash, size_bytes | integrity check; size (W11: not padded yet) | account |
 | created_at, ledger_entry_id | when sealed; link to the ledger | account |
@@ -112,6 +112,22 @@ start over a database that still has sealed-match entries or report releases.
 | phone_tokens | keyed hash of a verified number and a count; no account id, no rowid | **forever** (no row names an account, so none can be deleted with one) |
 | matching_meta | OPRF public keys, key epoch, signed counselor roster | deployment |
 | shred_authorizations | transient row inside the account-deletion transaction | never committed |
+
+## 1a. Draft slots (SQLite, `<main db name>-drafts.db` beside it, or `MATRA_DRAFTS_DB_PATH`)
+
+Her draft, saved over as she writes (docs/SECURITY_WHITEPAPER.md §4b). No ledger entry and no `audit_events` row for a
+slot write. Every write ends with a TRUNCATE checkpoint, and `secure_delete` is on, so the file and its WAL hold only
+the newest copy once a write returns (a backup or snapshot taken earlier, or freed filesystem blocks, can still hold
+an older one).
+
+### slots (WITHOUT ROWID)
+| Column | What / why | Retention |
+|---|---|---|
+| owner_id | which account | account (deleted with it; slots of an account that no longer exists are deleted at startup) |
+| name | 64 hex: HMAC under a key only her device derives, so the server can't tell which slot is her draft | account |
+| envelope, wrapped_key | ciphertext of her draft (padded to whole 16 KiB) and its key wrapped under her master key | until her next save replaces it, or the account is deleted |
+| seq | how many times the slot was written (compare-and-swap, so two devices don't overwrite each other) | account |
+| updated_day | UTC day of the last write; no finer time, no creation time | account |
 
 ## 2. App server memory (never written)
 

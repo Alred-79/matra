@@ -123,6 +123,8 @@ machine on purpose, which a real deployment must never do.
 | `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` | `2` | How many accounts one phone can enable for sealed matching. Counts are never decremented |
 | `MATRA_REQUIRE_PHONE_VERIFICATION` | unset | `0` turns the phone step off in development only; refused in production |
 | `MATRA_DB_PATH` | `/app/apps/server/data/matra.db` | Must be on the persistent disk |
+| `MATRA_DRAFTS_DB_PATH` | unset | Her draft slots' own SQLite file (SECURITY_WHITEPAPER §4b). Default: `<name>-drafts.db` beside `MATRA_DB_PATH` (`matra-drafts.db`). Must be on the same persistent disk, and backed up and deleted together with the main database |
+| `MATRA_DRAFT_MODE` | unset (`slot`) | `slot`: her draft is saved over as she writes; only sealed versions are records, with ledger entries. `keep-versions`: every draft save is also kept as a record with a ledger entry, until she deletes her account. The app's notices say which one is running. **Which one a real-data pilot uses is for counsel (Q-004)**; anything else is refused |
 | `MATRA_TRUST_PROXY` | `1` | Number of proxy hops in front of the app (Render: 1). Needed for per-IP rate limiting (the IP is only ever HMACed under a daily in-memory salt, never stored; see "Logs and IP addresses" below) |
 | `MATRA_LOG_REQUESTS` | unset (on) | `0` turns off request log lines. When on they are `METHOD <route pattern> status ms` only (no URL, ids, IP or user agent). Also read by the key holders |
 | `PORT` | set by the host | Default 4000 locally, 8080 in the Docker image. The server binds `0.0.0.0` in production |
@@ -238,7 +240,7 @@ Steps:
    ```
    This is idempotent. It creates the fictional attorneys (`attorney.nj1`, `attorney.ny1`, `attorney.nj2`, all verified) and `jane.demo`. The passphrases are printed and listed in the root README. They are public, so anyone can sign in as these accounts. That is acceptable for fictional data only.
 4. Optional: to verify an attorney who registered through the UI, run `node --import tsx apps/server/src/verify-attorney.ts <username>` in the Shell.
-5. Back up or reset: the database is the single file at `MATRA_DB_PATH` (plus `-wal`/`-shm`). To reset a demo, stop the service, delete those files on the disk, start it, and seed again.
+5. Back up or reset: the data is two files, `MATRA_DB_PATH` and the draft slots beside it (`matra-drafts.db`), each plus `-wal`/`-shm`. Back them up together. To reset a demo, stop the service, delete all of those files on the disk, start it, and seed again.
 
 Unverified on Render: the container runs as the non-root `node` user. If the mounted disk turns out not to be writable by that user (the server will log `SQLITE_CANTOPEN` or `EACCES` on boot), fix the ownership of the mount once from the Shell, or ask Render support. Do not switch the image to run as root.
 

@@ -12,6 +12,8 @@ import base from './playwright.config';
 const API_PORT = Number(process.env.MATRA_E2E_PILOT_API_PORT) || 4600;
 const WEB_PORT = Number(process.env.MATRA_E2E_PILOT_WEB_PORT) || 5178;
 const DB = process.env.MATRA_E2E_PILOT_DB || path.resolve('e2e/.data/e2e-pilot.db');
+/** Draft slots' file beside it (apps/server/src/slots.ts draftsDbPathFor). */
+const DRAFTS = DB.replace(/\.db$/, '') + '-drafts.db';
 
 export default defineConfig({
   ...base,
@@ -21,7 +23,7 @@ export default defineConfig({
   webServer: [
     {
       command: [
-        `rm -f "${DB}" "${DB}-wal" "${DB}-shm"`,
+        `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${DRAFTS}" "${DRAFTS}-wal" "${DRAFTS}-shm"`,
         `mkdir -p "${path.dirname(DB)}"`,
         `MATRA_MATCHING=off MATRA_DB_PATH="${DB}" npm run seed --silent`,
         `MATRA_MATCHING=off MATRA_DB_PATH="${DB}" PORT=${API_PORT} MATRA_AUTO_VERIFY_ATTORNEYS=1 npx tsx apps/server/src/index.ts`,

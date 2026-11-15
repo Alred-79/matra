@@ -68,7 +68,9 @@ import type {
   VaultRecordMeta,
   WrappedKey,
 } from '@matra/shared';
+import { SLOT_MAX_PER_ACCOUNT, type DraftMode, type GetSlotResponse, type PutSlotResponse } from '@matra/shared';
 import { openDb, type DB } from './db.js';
+import { SlotStore, draftsDbPathFor } from './slots.js';
 import {
   appendLedger,
   canonicalEnvelope,
@@ -104,6 +106,14 @@ import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneTok
 export interface CreateAppOptions {
   /** SQLite path, or ':memory:' for tests. */
   dbPath: string;
+  /** Draft slots' SQLite file (src/slots.ts). Default: `<name>-drafts.db` beside `dbPath` (':memory:' with it). */
+  draftsDbPath?: string;
+  /**
+   * MATRA_DRAFT_MODE (packages/shared/src/slots.ts). Default 'slot': a draft save replaces the one before and writes
+   * nothing else. 'keep-versions': each save also files the same envelope as a record with a ledger entry, so every
+   * earlier draft is kept (the launch default waits on counsel: Q-004, Q-073).
+   */
+  draftMode?: DraftMode;
   /** Server secret for HMACs (fake prelogin salts). */
   pepper: Buffer | string;
   /** Allowed CORS origins (the Vite dev server proxies /api, so CORS is rarely needed). */
@@ -207,6 +217,10 @@ export class HttpError extends Error {
     super(message);
   }
 }
+
+/** A draft-slot write or delete named a seq that is no longer current (another device or tab saved since). */
+const slotConflict = () => new HttpError(409, 'slot_conflict', 'A newer draft was saved from another device or tab.');
+const tooManySlots = () => new HttpError(409, 'too_many_slots', 'This space already holds as many drafts as it can.');
 
 /**
  * Stands in for a sealed-matching object (key holders, matcher) when matching is off: any use answers 404
@@ -502,6 +516,11 @@ const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action = 'auth.recovere
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
+  const slots = new SlotStore(opts.draftsDbPath ?? draftsDbPathFor(opts.dbPath), SLOT_MAX_PER_ACCOUNT);
+  const draftMode: DraftMode = opts.draftMode ?? 'slot';
+  // An account deletion that stopped between the two files leaves slots without an account: remove them now.
+  const userExists = db.prepare('SELECT 1 FROM users WHERE id = ?');
+  slots.sweepOrphans((id) => !!userExists.get(id));
   /** Sealed matching's settings when it is on; undefined when off (src/matching-off.ts). */
   const mopts = opts.matching || undefined;
   if (!mopts) checkLeftoverMatchingRows(db, process.env.NODE_ENV === 'production');
@@ -510,6 +529,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   const app = express();
   app.locals.db = db;
+  app.locals.slots = slots;
   app.disable('x-powered-by');
   app.set('etag', false);
   if (opts.trustProxy) app.set('trust proxy', opts.trustProxy);
@@ -980,6 +1000,57 @@ export function createApp(opts: CreateAppOptions): express.Express {
       ownerWrappedKey: JSON.parse(r.owner_wrapped_key),
     };
     res.json({ record });
+  });
+
+  // ════════════ vault: draft slots (src/slots.ts) ════════════
+  // Her draft, overwritten in place: no ledger entry, no audit row. With MATRA_DRAFT_MODE=keep-versions each write is
+  // also filed as a record + ledger entry (as every draft save was before slots), in the same request.
+  app.get('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
+    const name = parse(S.slotName, req.params.name);
+    const row = slots.get(req.user!.id, name);
+    const body: GetSlotResponse = {
+      slot: row
+        ? { name: row.name, envelope: JSON.parse(row.envelope), wrappedKey: JSON.parse(row.wrapped_key), seq: row.seq, updatedDay: row.updated_day }
+        : null,
+      draftMode,
+    };
+    res.json(body);
+  });
+
+  app.put('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const name = parse(S.slotName, req.params.name);
+    const body = parse(S.putSlotRequest, req.body);
+    const envelopeJson = canonicalEnvelope(body.envelope);
+    const wrappedJson = JSON.stringify(body.wrappedKey);
+    const current = slots.seqOf(me.id, name);
+    if (current !== body.expectedSeq) throw slotConflict();
+    if (current === 0 && !slots.hasRoom(me.id)) throw tooManySlots();
+    if (draftMode === 'keep-versions') {
+      // Keep this version as well: a record with a ledger entry, written before the slot so a failure keeps neither.
+      const id = newId();
+      db.transaction(() => {
+        const ledgerEntry = appendLedger(db, 'record.sealed', id, envelopeContentHash(body.envelope));
+        db.prepare(
+          `INSERT INTO records (id, owner_id, supersedes, envelope, owner_wrapped_key, content_hash, created_at, ledger_entry_id)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        ).run(id, me.id, envelopeJson, wrappedJson, ledgerEntry.contentHash, ledgerEntry.timestamp, ledgerEntry.id);
+        audit(me.id, 'record.created', `Encrypted record saved (ledger #${ledgerEntry.seq})`);
+      })();
+    }
+    const result = slots.put(me.id, name, envelopeJson, wrappedJson, body.expectedSeq);
+    if (!result.ok && result.reason === 'conflict') throw slotConflict();
+    if (!result.ok) throw tooManySlots();
+    const out: PutSlotResponse = { seq: result.seq, updatedDay: result.updatedDay, draftMode };
+    res.json(out);
+  });
+
+  app.delete('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
+    const name = parse(S.slotName, req.params.name);
+    const body = parse(S.deleteSlotRequest, req.body ?? {});
+    const r = slots.delete(req.user!.id, name, body.expectedSeq);
+    if (!r.ok) throw slotConflict();
+    res.json({ ok: true });
   });
 
   // ════════════ vault: blobs ════════════
@@ -2402,6 +2473,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     })();
     // Move the deleted pages out of the WAL file now rather than at some later automatic checkpoint (same as phone tokens).
     checkpoint();
+    // Her draft slots live in their own file: delete them too (and empty that WAL). A crash between the two leaves
+    // slots without an account, which the next start removes (slots.sweepOrphans).
+    slots.deleteOwner(me.id);
     void syncMatcher(); // her entries leave the matcher; a counselor's departure changes its roster
     res.json({ ok: true });
   });
@@ -2419,7 +2493,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ['sms global hour', smsGlobalHour],
         ['sms global day', smsGlobalDay],
       ];
-      const app_ = appProcess({ db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !!mopts && !mopts.oprf?.remote });
+      const app_ = appProcess({ db, slotsDb: slots.db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !!mopts && !mopts.oprf?.remote });
       const holderStates = await Promise.all(
         remoteHolders.map((url, i) =>
           fetchProcess(`${url.replace(/\/+$/, '')}/debug/state`, { name: `Key holder ${i + 1}`, role: 'holder', note: `Separate process at ${url}.` }),
@@ -2526,4 +2600,9 @@ export function flushPhoneTokens(app: express.Express): void {
 
 export function getDb(app: express.Express): DB {
   return app.locals.db as DB;
+}
+
+/** The draft-slot store (src/slots.ts), for tests and the inspector. */
+export function getSlots(app: express.Express): SlotStore {
+  return app.locals.slots as SlotStore;
 }

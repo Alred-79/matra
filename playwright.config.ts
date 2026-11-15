@@ -13,6 +13,8 @@ import { defineConfig, devices } from '@playwright/test';
 const API_PORT = Number(process.env.MATRA_E2E_API_PORT) || 4100;
 const WEB_PORT = Number(process.env.MATRA_E2E_WEB_PORT) || 5174;
 const DB = process.env.MATRA_E2E_DB || path.resolve('e2e/.data/e2e.db');
+/** Draft slots' file beside it (apps/server/src/slots.ts draftsDbPathFor). */
+const DRAFTS = DB.replace(/\.db$/, '') + '-drafts.db';
 
 export default defineConfig({
   testDir: './e2e',
@@ -37,7 +39,7 @@ export default defineConfig({
     {
       // Fresh DB every run so the suite is repeatable, then seed demo accounts, then serve.
       command: [
-        `rm -f "${DB}" "${DB}-wal" "${DB}-shm"`,
+        `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${DRAFTS}" "${DRAFTS}-wal" "${DRAFTS}-shm"`,
         `mkdir -p "${path.dirname(DB)}"`,
         // This suite walks the full demo path, sealed matching included: MATRA_MATCHING=on (the pilot runs it off).
         `MATRA_MATCHING=on MATRA_DB_PATH="${DB}" npm run seed --silent`,

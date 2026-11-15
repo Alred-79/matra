@@ -4,6 +4,7 @@ import { loadMatchingMode } from './matching-off.js';
 import {
   WEB_DIST_DIR,
   loadDemoMode,
+  loadDraftMode,
   loadMatcherConfig,
   loadMatchingSettings,
   loadOprfLimits,
@@ -11,6 +12,7 @@ import {
   loadPepper,
   loadPhoneVerification,
   resolveDbPath,
+  resolveDraftsDbPath,
 } from './config.js';
 import { RemoteHolderPool } from './holders.js';
 import { inspectorEnabled } from '@matra/shared';
@@ -19,6 +21,14 @@ const production = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT) || 4000;
 const host = process.env.HOST || (production ? '0.0.0.0' : undefined);
 const dbPath = resolveDbPath();
+const draftsDbPath = resolveDraftsDbPath(dbPath);
+// MATRA_DRAFT_MODE=slot|keep-versions (packages/shared/src/slots.ts): the launch default waits on counsel (Q-004, Q-073).
+const draftMode = loadDraftMode();
+console.log(
+  draftMode === 'slot'
+    ? '[matra] drafts: MATRA_DRAFT_MODE=slot — a draft save replaces the one before; only sealed versions are kept.'
+    : '[matra] drafts: MATRA_DRAFT_MODE=keep-versions — every draft save is also kept as a record with a ledger entry.',
+);
 const corsOrigins = process.env.MATRA_CORS_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean);
 const autoVerifyAttorneys = process.env.MATRA_AUTO_VERIFY_ATTORNEYS === '1';
 if (autoVerifyAttorneys) console.warn('[matra] WARNING: MATRA_AUTO_VERIFY_ATTORNEYS=1 — new attorneys are auto-verified (dev only).');
@@ -89,6 +99,8 @@ if (matchingMode === 'off') {
 
 const app = createApp({
   dbPath,
+  draftsDbPath,
+  draftMode,
   pepper,
   corsOrigins,
   autoVerifyAttorneys,
@@ -101,7 +113,7 @@ const app = createApp({
 });
 
 const onListen = () => {
-  console.log(`[matra] ${production ? 'production' : 'dev'} server on http://${host ?? 'localhost'}:${port}  (db: ${dbPath})`);
+  console.log(`[matra] ${production ? 'production' : 'dev'} server on http://${host ?? 'localhost'}:${port}  (db: ${dbPath}; drafts: ${draftsDbPath})`);
   if (webDir) console.log(`[matra] serving web app from ${webDir}${demoBanner ? ' with the DEMO banner' : ''}`);
 };
 const server = host ? app.listen(port, host, onListen) : app.listen(port, onListen);

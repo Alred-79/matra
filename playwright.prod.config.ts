@@ -13,6 +13,8 @@ import base from './playwright.config';
  */
 const PORT = Number(process.env.MATRA_E2E_PROD_PORT) || 4300;
 const DB = process.env.MATRA_E2E_DB || path.resolve('e2e/.data/e2e-prod.db');
+/** Draft slots' file beside it (apps/server/src/slots.ts draftsDbPathFor). */
+const DRAFTS = DB.replace(/\.db$/, '') + '-drafts.db';
 // Throwaway pepper for this isolated test stack only. Real deployments set their own secret.
 const PEPPER = 'e2e-prod-only-pepper-not-a-secret-0123456789';
 // Throwaway threshold OPRF keys (production refuses to start without them, and never generates them): a fresh 2-of-3
@@ -58,7 +60,7 @@ export default defineConfig({
     {
       command: [
         `test -f apps/web/dist/index.html || (echo "run npm run build first" >&2; exit 1)`,
-        `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${path.dirname(DB)}"/holder-*.db* "${path.dirname(DB)}"/matcher.db*`,
+        `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${DRAFTS}" "${DRAFTS}-wal" "${DRAFTS}-shm" "${path.dirname(DB)}"/holder-*.db* "${path.dirname(DB)}"/matcher.db*`,
         `mkdir -p "${path.dirname(DB)}" "${KEYS}"`,
         ceremony,
         phoneKey,

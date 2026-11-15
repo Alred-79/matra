@@ -42,7 +42,9 @@ import {
   normalizeMatchIdentifier,
   publicKeyFingerprint,
   rosterPublicKey,
+  sealSlot,
   sha256Hex,
+  slotName,
   submitMatchEntry,
   toBase64,
   wrapKeyForRecipient,
@@ -63,6 +65,7 @@ import {
   loadPepper,
   loadPhoneVerification,
   resolveDbPath,
+  resolveDraftsDbPath,
 } from './config.js';
 
 const DEMO_PASSPHRASES = {
@@ -241,6 +244,7 @@ async function main() {
   const matcher = loadMatcherConfig(process.env, { releaseDelayHours: matchingSettings.releaseDelayHours });
   const app = createApp({
     dbPath,
+    draftsDbPath: resolveDraftsDbPath(dbPath),
     pepper: loadPepper(),
     matching: {
       oprf: loadOprfThreshold(),
@@ -320,14 +324,21 @@ async function main() {
     return { item, key };
   }
 
-  /** Encrypt and upload a sealed ('final') story, as the web app's review screen does. */
+  /**
+   * Encrypt and upload a sealed ('final') story, as the web app's review screen does: only {kind, record, savedAt}. The
+   * fingerprints of what she sealed for matching go into her draft slot, as the web app keeps them (lib/draftSlot.ts).
+   */
   async function sealStory(u: Survivor, s: StorySeed, escrowedHashes: string[] = [], evidence: EvidenceItem[] = []) {
     const key = await generateContentKey();
-    const payload = { kind: 'final', record: intakeRecord(s, evidence), escrowedHashes, savedAt: new Date().toISOString() };
+    const payload = { kind: 'final', record: intakeRecord(s, evidence), savedAt: new Date().toISOString() };
     const res = await call<{ record: { id: string; createdAt: string } }>(u.token, 'POST', '/api/vault/records', {
       envelope: await encryptJSON(payload, key),
       ownerWrappedKey: await wrapKeyWithMaster(key, u.masterKey),
     });
+    if (escrowedHashes.length) {
+      const slot = { kind: 'draft', slotVersion: 1, evidence, escrowedHashes, savedAt: payload.savedAt };
+      await call(u.token, 'PUT', `/api/vault/slots/${await slotName(u.masterKey, 'draft')}`, { ...(await sealSlot(slot, u.masterKey)), expectedSeq: 0 });
+    }
     return { id: res.record.id, createdAt: res.record.createdAt, key };
   }
 

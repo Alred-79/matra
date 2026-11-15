@@ -1,5 +1,6 @@
 /** zod validators for every request the API accepts. Unknown keys are stripped. */
 import { z } from 'zod';
+import { SLOT_BUCKET_BYTES, SLOT_MAX_BYTES, SLOT_NAME_RE } from '@matra/shared';
 
 const B64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
@@ -135,6 +136,25 @@ export const createRecordRequest = z.object({
   ownerWrappedKey,
   supersedes: id.optional(),
 });
+
+/** A draft slot's opaque name: hex HMAC under her slot-name key (packages/crypto/src/slots.ts). */
+export const slotName = z.string().regex(SLOT_NAME_RE, 'invalid slot name');
+
+/** Slot ciphertext must fill whole 16 KiB buckets (padded on her device), up to SLOT_MAX_BYTES. */
+export const slotEnvelope = envelope.extend({
+  ct: base64(Math.ceil(SLOT_MAX_BYTES / 3) * 4).refine((s) => {
+    const n = b64Len(s);
+    return n > 0 && n % SLOT_BUCKET_BYTES === 0 && n <= SLOT_MAX_BYTES;
+  }, 'slot ciphertext must be whole 16 KiB buckets'),
+});
+
+export const putSlotRequest = z.object({
+  envelope: slotEnvelope,
+  wrappedKey: ownerWrappedKey,
+  expectedSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+});
+
+export const deleteSlotRequest = z.object({ expectedSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional() });
 
 export const createShareRequest = z.object({
   recordId: id,
