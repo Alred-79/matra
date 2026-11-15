@@ -98,6 +98,9 @@ export function AttorneyCases() {
           Received a summary PDF or evidence files by email or on a drive? <Link to="/verify">Check a file</Link> in your
           browser; nothing is uploaded.
         </p>
+        <p className="small muted" style={{ margin: 0 }}>
+          <Link to="/attorney/passphrase" data-testid="attorney-passphrase-link">Change your passphrase or sign out other devices</Link>
+        </p>
       </div>
       <section className="card stack" aria-labelledby="active">
         <h2 id="active">Active files</h2>

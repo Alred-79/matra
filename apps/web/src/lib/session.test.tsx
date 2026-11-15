@@ -78,6 +78,61 @@ describe('new passphrases (PR 7)', () => {
   });
 });
 
+describe('signed out elsewhere (PR 8)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function serverThatEnds() {
+    const base = fakeAuthFetch();
+    const state = { ended: false };
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), 'http://x').pathname;
+      if (path === '/api/auth/sessions' && state.ended) return json(401, { error: 'Session invalid or expired', code: 'unauthorized' });
+      if (path === '/api/auth/sessions/revoke-others') return json(401, { error: 'That passphrase is incorrect.', code: 'invalid_credentials' });
+      if (path === '/api/auth/sessions') return json(200, { sessions: [] });
+      return base.fetchImpl(input, init);
+    });
+    return { fetchImpl: fetchImpl as unknown as typeof fetch, state };
+  }
+
+  it('a request the server refuses because this session is gone forgets everything here, and says why', async () => {
+    const { fetchImpl, state } = serverThatEnds();
+    render(<Harness fetchImpl={fetchImpl} />);
+    await act(async () => {
+      await current!.register({ username: 'wren-30', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
+    });
+    // a wrong passphrase is not a signed-out session
+    await act(async () => {
+      await expect(current!.api.revokeOtherSessions({ authKey: 'AAAAAAAAAAAAAAAAAAAAAA==' })).rejects.toThrow();
+    });
+    expect(screen.getByTestId('state')).toHaveTextContent('in:wren-30');
+    state.ended = true;
+    await act(async () => {
+      await expect(current!.api.listSessions()).rejects.toThrow();
+    });
+    expect(screen.getByTestId('state')).toHaveTextContent('out');
+    expect(current!.lockReason).toBe('ended');
+  }, 60_000);
+
+  it('signing out on purpose is not "signed out elsewhere", even if a request fails because of it', async () => {
+    const { fetchImpl, state } = serverThatEnds();
+    render(<Harness fetchImpl={fetchImpl} />);
+    await act(async () => {
+      await current!.register({ username: 'wren-31', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
+    });
+    state.ended = true;
+    const api = current!.api;
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = api.listSessions().catch(() => undefined);
+      await current!.logout();
+      await pending;
+    });
+    expect(screen.getByTestId('state')).toHaveTextContent('out');
+    expect(current!.lockReason).toBe(null);
+  }, 60_000);
+});
+
 describe('PBKDF2 rounds from the server', () => {
   afterEach(() => vi.restoreAllMocks());
 

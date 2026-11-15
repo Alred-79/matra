@@ -317,6 +317,12 @@ export function SignInForm({ role }: { role: Role }) {
 
   return (
     <form className="card stack" onSubmit={onSubmit}>
+      {lockReason === 'ended' && (
+        <p className="card soft" role="status" data-testid="signin-ended">
+          You were signed out on this device. That happens when your passphrase is changed, when someone chooses “sign
+          out everywhere else”, or after 12 hours. Everything is still here. Sign in again whenever you’re ready.
+        </p>
+      )}
       {lockReason === 'idle' && (
         <p className="card soft" role="status">
           We locked your space after 15 minutes of quiet, to keep it safe. Everything is still here — sign in again

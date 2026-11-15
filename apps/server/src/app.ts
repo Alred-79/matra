@@ -516,10 +516,11 @@ export const LOGIN_FAILED_AUDIT_CAP = 10;
 /** Newest activity rows GET /api/audit returns. Security events (SECURITY_AUDIT_SQL) come back on top, however old. */
 export const AUDIT_LIST_LIMIT = 1000;
 /**
- * Activity she must always be able to see, even under a flood of other rows: anything about her recovery code, and a
- * passphrase reset with it (W20). Each is capped or rate-limited where it is written.
+ * Activity she must always be able to see, even under a flood of other rows: anything about her recovery code, a
+ * passphrase reset with it (W20), a passphrase change, and her other sessions being signed out. Each is capped or
+ * rate-limited where it is written.
  */
-const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action = 'auth.recovered')`;
+const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action IN ('auth.recovered', 'auth.passphrase_changed', 'auth.other_sessions_ended'))`;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -865,9 +866,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
    * Re-authenticate with the passphrase auth key before changing what can open her account (a recovery code) or
    * deleting it. A session alone is not enough: a session can be left open on a shared device.
    */
-  const reauth = async (u: UserRow, authKey: string, purpose: 'recovery' | 'delete' = 'recovery') => {
+  const reauth = async (u: UserRow, authKey: string, purpose: 'recovery' | 'delete' | 'passphrase' | 'sessions' = 'recovery') => {
     if (!(await verifyAuthKey(authKey, u.auth_salt, u.auth_hash))) {
       if (purpose === 'delete') audit(u.id, 'auth.delete_reauth_failed', 'An attempt to delete the account with an incorrect passphrase');
+      else if (purpose === 'passphrase') audit(u.id, 'auth.passphrase_reauth_failed', 'A passphrase change with an incorrect passphrase');
+      else if (purpose === 'sessions') audit(u.id, 'auth.sessions_reauth_failed', 'An attempt to sign out other sessions with an incorrect passphrase');
       else audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'That passphrase is incorrect.');
     }
@@ -908,6 +911,67 @@ export function createApp(opts: CreateAppOptions): express.Express {
       audit(u.id, 'recovery.turned_off', 'Turned off the recovery code');
     })();
     res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow) });
+  });
+
+  // ════════════ changing the passphrase; her other sessions (PR 8) ════════════
+  // The account secret AS never changes here: her client unwraps it with the old passphrase (key version 1: derives it,
+  // the same bytes), wraps it under a key from the new one, and sends that. Records, files, her private key, draft
+  // slot names (HKDF of AS) and shares all hang off AS, so nothing else is re-encrypted, and a recovery code (which
+  // wraps the same AS) keeps working. It stops future sign-ins with the old passphrase; it can't take back a copy of AS
+  // that someone already unwrapped (W20 residual 1, whitepaper §3).
+  const deleteOtherSessions = db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?');
+
+  app.post('/api/account/passphrase', auth, async (req, res) => {
+    const me = req.user!;
+    rateLimit(req, 'passphrase-change', me.username);
+    const body = parse(S.changePassphraseRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
+    const u = q.userById.get(me.id) as UserRow;
+    await reauth(u, body.authKey, 'passphrase');
+    const pass = await hashAuthKey(body.newAuthKey);
+    let endedSessions = 0;
+    const changed = db.transaction(() => {
+      // Conditional on the passphrase she just proved: if it changed during the scrypt above (another tab, a reset with
+      // her recovery code), nothing changes here.
+      const r = db
+        .prepare(
+          `UPDATE users SET auth_hash = ?, auth_salt = ?, kdf_salt = ?, kdf_iterations = ?, key_version = 2, wrapped_account_key = ?
+            WHERE id = ? AND auth_hash = ?`,
+        )
+        .run(pass.hash, pass.salt, body.kdfSalt, body.kdfIterations, canonicalEnvelope(body.wrappedAccountKey), u.id, u.auth_hash);
+      if (r.changes !== 1) return false;
+      endedSessions = deleteOtherSessions.run(u.id, sha256Hex(req.sessionToken!)).changes;
+      // a reset started with her recovery code before the change has to start again (with the code, which still works)
+      for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
+      audit(u.id, 'auth.passphrase_changed', 'You changed your passphrase; every other session was signed out');
+      return true;
+    })();
+    if (!changed)
+      throw new HttpError(409, 'passphrase_changed', 'Your passphrase was changed somewhere else just now, so nothing was changed here.');
+    res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow), endedSessions });
+  });
+
+  app.get('/api/auth/sessions', auth, (req, res) => {
+    const mine = sha256Hex(req.sessionToken!);
+    const rows = db
+      .prepare('SELECT token_hash, created_at, expires_at FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC, rowid DESC')
+      .all(req.user!.id, Date.now()) as Array<{ token_hash: string; created_at: string; expires_at: number }>;
+    res.json({
+      sessions: rows.map((r) => ({ signedInAt: r.created_at, expiresAt: new Date(r.expires_at).toISOString(), current: r.token_hash === mine })),
+    });
+  });
+
+  app.post('/api/auth/sessions/revoke-others', auth, async (req, res) => {
+    const me = req.user!;
+    rateLimit(req, 'sessions-revoke', me.username);
+    const body = parse(S.revokeOtherSessionsRequest, req.body);
+    await reauth(q.userById.get(me.id) as UserRow, body.authKey, 'sessions');
+    let endedSessions = 0;
+    db.transaction(() => {
+      endedSessions = deleteOtherSessions.run(me.id, sha256Hex(req.sessionToken!)).changes;
+      audit(me.id, 'auth.other_sessions_ended', 'You signed out every other session');
+    })();
+    res.json({ endedSessions });
   });
 
   app.post('/api/auth/recover/start', async (req, res) => {

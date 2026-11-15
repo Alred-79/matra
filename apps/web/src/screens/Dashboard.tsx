@@ -21,6 +21,10 @@ const AUDIT_TEXT: Record<string, string> = {
   'auth.reauth_failed': 'Someone tried to change your recovery code with the wrong passphrase',
   'auth.delete_reauth_failed': 'Someone tried to delete your space with the wrong passphrase',
   'auth.recovered': 'Your passphrase was reset with your recovery code',
+  'auth.passphrase_changed': 'You changed your passphrase (every other session was signed out)',
+  'auth.passphrase_reauth_failed': 'Someone tried to change your passphrase with the wrong one',
+  'auth.other_sessions_ended': 'You signed out everywhere else',
+  'auth.sessions_reauth_failed': 'Someone tried to sign out your other sessions with the wrong passphrase',
   'recovery.set_up': 'You set up a recovery code',
   'recovery.replaced': 'You made a new recovery code (the old one stopped working)',
   'recovery.turned_off': 'You turned off your recovery code',
@@ -505,6 +509,12 @@ export function Dashboard() {
       </section>
 
       <ExportCard>
+        <p className="small muted" style={{ margin: 0 }}>
+          Want a new passphrase, or to sign out other devices?{' '}
+          <Link to="/vault/passphrase" data-testid="passphrase-link">
+            Passphrase and devices
+          </Link>
+        </p>
         <p className="small muted" style={{ margin: 0 }}>
           Want to erase your space instead?{' '}
           <Link to="/vault/delete" data-testid="delete-account-link">

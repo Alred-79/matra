@@ -56,6 +56,8 @@ Retention key: **account** = until the account is deleted (`POST /api/account/de
 Sessions expire 12 h after sign-in (`SESSION_TTL_MS`). Expired rows are deleted at startup, on every sign-in, and by a
 sweep every 10 minutes (`auth.ts purgeExpiredSessions`, `app.ts` housekeeping), so an abandoned session (tab closed,
 quick exit, auto-lock) does not leave a sign-in time on disk. While a session is live, `created_at` is a sign-in time.
+She can see her own live sessions' sign-in and expiry times ("Passphrase and devices"); that is all a session row holds.
+Changing her passphrase, or "sign out everywhere else", deletes her other rows at once.
 
 ### attorney_profiles / counselor_profiles
 | Column | What / why | Retention |

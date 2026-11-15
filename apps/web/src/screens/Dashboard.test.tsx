@@ -143,3 +143,11 @@ describe('Home reads partially, and says what is left out and why', () => {
     expect(note).toHaveTextContent(/We couldn’t reach Matra to open one saved version of your space just now/);
   }, 60_000);
 });
+
+describe('Home: your data', () => {
+  it('links to "Passphrase and devices" from the Your data group', async () => {
+    await homeWith('wren-pass');
+    const data = await screen.findByTestId('home-data', {}, { timeout: 15_000 });
+    expect(within(data).getByTestId('passphrase-link')).toHaveTextContent('Passphrase and devices');
+  }, 60_000);
+});

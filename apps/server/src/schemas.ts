@@ -118,6 +118,18 @@ export const setUpRecoveryRequest = z.object({
 
 export const turnOffRecoveryRequest = z.object({ authKey: base64(128) });
 
+/** Changing the passphrase: re-authentication, then the new auth material and her account secret wrapped under it. */
+export const changePassphraseRequest = z.object({
+  authKey: base64(128),
+  newAuthKey: authKey32,
+  kdfSalt: base64(128).refine((s) => b64Len(s) >= 16, 'kdfSalt must be at least 16 bytes'),
+  kdfIterations: z.number().int().min(1_000).max(10_000_000),
+  wrappedAccountKey: accountKeyEnvelope,
+});
+
+/** Signing out her other sessions needs her passphrase again, not only a session. */
+export const revokeOtherSessionsRequest = z.object({ authKey: base64(128) });
+
 /** Deleting her account needs her passphrase again (its auth key), not only a session. */
 export const deleteAccountRequest = z.object({ authKey: base64(128) });
 

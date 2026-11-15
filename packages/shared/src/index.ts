@@ -836,6 +836,36 @@ export interface TurnOffRecoveryRequest { authKey: string }
 /** POST /api/account/delete: her passphrase auth key again, not only a session. */
 export interface DeleteAccountRequest { authKey: string }
 export interface RecoverStartRequest { username: string; recoveryAuthKey: string }
+
+// ── changing the passphrase, and other signed-in sessions ──
+
+/**
+ * POST /api/account/passphrase (signed in, any role). Her account secret stays the same: her client unwraps it with
+ * the old passphrase (key version 1: derives it), wraps it under the new one, and sends only that and the new auth
+ * material. A key-version-1 account becomes version 2. Her recovery code (if any) keeps working, because it wraps the
+ * same secret. Every other session of hers ends.
+ */
+export interface ChangePassphraseRequest {
+  /** her current passphrase auth key (re-authentication) */
+  authKey: string;
+  /** the new passphrase's auth key, salt and PBKDF2 rounds (at least the server's floor) */
+  newAuthKey: string;
+  kdfSalt: string;
+  kdfIterations: number;
+  /** AES-GCM(KEK_pass of the new passphrase, account secret) */
+  wrappedAccountKey: Envelope;
+}
+export interface ChangePassphraseResponse { user: PublicUser; endedSessions: number }
+
+/** One of her signed-in sessions (GET /api/auth/sessions). Matra keeps no device, browser or place for a session. */
+export interface SessionInfo {
+  signedInAt: string;
+  expiresAt: string;
+  /** the session that asked */
+  current: boolean;
+}
+/** POST /api/auth/sessions/revoke-others: her passphrase auth key again, not only a session. */
+export interface RevokeOtherSessionsRequest { authKey: string }
 export interface RecoverStartResponse {
   /** single use, 10 minutes, held in server memory only */
   resetToken: string;
@@ -923,6 +953,12 @@ export interface ApiError { error: string; code?: string }
  POST   /api/account/recovery    SetUpRecoveryRequest -> { user: PublicUser } (401 invalid_credentials on a wrong passphrase;
                                                          403 forbidden_role for a non-survivor account)
  DELETE /api/account/recovery    TurnOffRecoveryRequest -> { user: PublicUser }
+ POST   /api/account/passphrase  ChangePassphraseRequest -> ChangePassphraseResponse (401 invalid_credentials on a wrong
+                                                         passphrase; 409 passphrase_changed if it changed meanwhile;
+                                                         429 rate_limited; every other session of hers ends)
+ GET    /api/auth/sessions                            -> { sessions: SessionInfo[] }  (her unexpired sessions, newest first)
+ POST   /api/auth/sessions/revoke-others RevokeOtherSessionsRequest -> { endedSessions: number } (401 invalid_credentials
+                                                         on a wrong passphrase; 429 rate_limited)
 
  POST   /api/vault/records      CreateRecordRequest   -> CreateRecordResponse
  GET    /api/vault/records                            -> { records: VaultRecordMeta[] }

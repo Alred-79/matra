@@ -33,6 +33,10 @@ import type {
   RecoverStartResponse,
   RegisterRequest,
   SetUpRecoveryRequest,
+  ChangePassphraseRequest,
+  ChangePassphraseResponse,
+  RevokeOtherSessionsRequest,
+  SessionInfo,
   TurnOffRecoveryRequest,
   DeleteAccountRequest,
   Share,
@@ -66,16 +70,24 @@ export interface ApiClientOptions {
   baseUrl?: string;
   getToken?: () => string | null | undefined;
   fetchImpl?: typeof fetch;
+  /**
+   * Called when the server says the session a request was sent with no longer exists (401 unauthorized or
+   * session_expired): it was signed out elsewhere (a passphrase change, "sign out everywhere else") or ran out.
+   * Gets the token that request carried. Not called for a wrong passphrase (invalid_credentials).
+   */
+  onSessionEnded?: (token: string) => void;
 }
 
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly getToken: () => string | null | undefined;
   private readonly fetchImpl: typeof fetch;
+  private readonly onSessionEnded?: (token: string) => void;
 
   constructor(opts: ApiClientOptions = {}) {
     this.baseUrl = opts.baseUrl ?? '';
     this.getToken = opts.getToken ?? (() => null);
+    this.onSessionEnded = opts.onSessionEnded;
     // bind so `this` isn't lost when the global fetch is stored on an object
     this.fetchImpl = opts.fetchImpl ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
   }
@@ -90,6 +102,7 @@ export class ApiClient {
   /** @internal shared with MatchingApiClient (api/matching.ts) */
   protected async raw(method: string, path: string, init: { body?: BodyInit; headers?: Record<string, string> } = {}) {
     let res: Response;
+    const token = this.getToken();
     try {
       res = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
@@ -111,6 +124,7 @@ export class ApiClient {
       } catch {
         /* non-JSON error body */
       }
+      if (res.status === 401 && token && (code === 'unauthorized' || code === 'session_expired')) this.onSessionEnded?.(token);
       throw new ApiError(res.status, message, code);
     }
     return res;
@@ -157,6 +171,17 @@ export class ApiClient {
   }
   recoverFinish(req: RecoverFinishRequest) {
     return this.json<AuthResponse>('POST', '/api/auth/recover/finish', req);
+  }
+
+  // ── passphrase change and signed-in sessions ──
+  changePassphrase(req: ChangePassphraseRequest) {
+    return this.json<ChangePassphraseResponse>('POST', '/api/account/passphrase', req);
+  }
+  listSessions() {
+    return this.json<{ sessions: SessionInfo[] }>('GET', '/api/auth/sessions');
+  }
+  revokeOtherSessions(req: RevokeOtherSessionsRequest) {
+    return this.json<{ endedSessions: number }>('POST', '/api/auth/sessions/revoke-others', req);
   }
 
   // ── vault ──

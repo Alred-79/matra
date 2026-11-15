@@ -183,6 +183,21 @@ export async function unwrapAccountSecret(wrapped: Envelope, kek: CryptoKey): Pr
 }
 
 /**
+ * A new passphrase for the same account secret (changing the passphrase, plan PR 8): a fresh salt, the new auth key,
+ * and AS wrapped under the new KEK_pass. AS itself is unchanged, so every record and file key, her private key, her
+ * draft-slot names and a recovery code's wrap of AS stay valid. The caller wipes `accountSecret`.
+ */
+export async function passphraseMaterialFor(
+  accountSecret: Uint8Array,
+  newPassphrase: string,
+  iterations = DEFAULT_KDF_ITERATIONS,
+): Promise<{ kdfSalt: string; kdfIterations: number; authKey: string; wrappedAccountKey: Envelope; keys: PassphraseKeys }> {
+  const kdfSalt = newKdfSalt();
+  const keys = await derivePassphraseKeys(newPassphrase, kdfSalt, iterations);
+  return { kdfSalt, kdfIterations: iterations, authKey: keys.authKey, wrappedAccountKey: await wrapAccountSecret(accountSecret, keys.kek), keys };
+}
+
+/**
  * The vault keys for an account. Version 1 (no `wrappedAccountKey`): derived from the passphrase, as since the first
  * release. Version 2: AS unwrapped with KEK_pass (throws on a wrong passphrase), imported, and wiped.
  */

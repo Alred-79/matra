@@ -19,6 +19,7 @@ import {
   legacyAccountSecret,
   newKdfSalt,
   parseRecoveryCode,
+  passphraseMaterialFor,
   unlockAccount,
   unwrapAccountSecret,
   unwrapKeyWithMaster,
@@ -118,11 +119,12 @@ export class RecoveryMaybeFinishedError extends SessionError {
 interface SessionCtx {
   session: Session | null;
   api: ApiClient;
-  lockReason: 'idle' | null;
+  /** why she was signed out: 15 quiet minutes, or her session was ended elsewhere (or ran out) */
+  lockReason: 'idle' | 'ended' | null;
   register(input: RegisterInput, onProgress?: (p: Progress) => void): Promise<Session>;
   login(username: string, passphrase: string, onProgress?: (p: Progress) => void): Promise<Session>;
   logout(): Promise<void>;
-  lock(reason?: 'idle'): void;
+  lock(reason?: 'idle' | 'ended'): void;
   refreshProfile(): Promise<void>;
   getWorkingData(): Promise<WorkingData | null>;
   setWorkingData(d: WorkingData | null): Promise<void>;
@@ -145,6 +147,13 @@ interface SessionCtx {
    * passphrase again). Does not sign her out here: the caller leaves the signed-in screens first, then locks.
    */
   deleteAccount(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
+  /**
+   * Signed in: a new passphrase for the same account (its secret is re-wrapped on this device; nothing is
+   * re-encrypted). Her recovery code keeps working, and every other session of hers is signed out.
+   */
+  changePassphrase(current: string, next: string, onProgress?: (p: Progress) => void): Promise<{ endedSessions: number }>;
+  /** Signed in: sign out every other session of hers (her passphrase again, not only this session). */
+  signOutOtherSessions(passphrase: string, onProgress?: (p: Progress) => void): Promise<{ endedSessions: number }>;
 }
 
 /** The most PBKDF2 rounds she will run (the server's own limit); more would only freeze her browser. */
@@ -189,7 +198,11 @@ export function SessionProvider({
   idleMs?: number;
 }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [lockReason, setLockReason] = useState<'idle' | null>(null);
+  const [lockReason, setLockReason] = useState<'idle' | 'ended' | null>(null);
+  // set below, once `lock` exists: the API client calls it when the server says this session is gone
+  const sessionEndedRef = useRef<(token: string) => void>(() => undefined);
+  // true while she is signing out or deleting her account on purpose: a request that fails because of it is not news
+  const leavingRef = useRef(false);
   const tokenRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   // working draft: encrypted under a per-draft key, which is itself wrapped under masterKey
@@ -203,8 +216,8 @@ export function SessionProvider({
   const api = useMemo(
     () =>
       __MATRA_MATCHING__
-        ? new MatchingApiClient({ getToken: () => tokenRef.current, fetchImpl })
-        : new ApiClient({ getToken: () => tokenRef.current, fetchImpl }),
+        ? new MatchingApiClient({ getToken: () => tokenRef.current, fetchImpl, onSessionEnded: (t) => sessionEndedRef.current(t) })
+        : new ApiClient({ getToken: () => tokenRef.current, fetchImpl, onSessionEnded: (t) => sessionEndedRef.current(t) }),
     [fetchImpl],
   );
 
@@ -228,6 +241,7 @@ export function SessionProvider({
     tokenRef.current = s.token;
     sessionRef.current = s;
     workingRef.current = null;
+    leavingRef.current = false;
     setLockReason(null);
     setSession(s);
   }, []);
@@ -470,10 +484,68 @@ export function SessionProvider({
       const { as, keys } = await accountSecretFromPassphrase(s, passphrase, 'That passphrase isn’t right. Nothing was deleted.');
       as.fill(0);
       onProgress?.('contacting');
+      leavingRef.current = true;
       try {
         await api.deleteAccount({ authKey: keys.authKey });
       } catch (e) {
+        leavingRef.current = false;
         if (e instanceof ApiError && e.status === 401) throw new SessionError('That passphrase isn’t right. Nothing was deleted.');
+        throw e;
+      }
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const changePassphrase = useCallback<SessionCtx['changePassphrase']>(
+    async (current, next, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      checkNewPassphrase(s.user.role, next, [s.user.username]);
+      if (next.normalize('NFKC') === current.normalize('NFKC')) throw new SessionError('That’s the passphrase you have now. Please choose a new one.');
+      onProgress?.('deriving');
+      const { as, keys } = await accountSecretFromPassphrase(s, current, 'That passphrase isn’t right. Nothing was changed.');
+      let body;
+      try {
+        const m = await passphraseMaterialFor(as, next, DEFAULT_KDF_ITERATIONS);
+        // Before anything is sent: the new wrap must open, with the new passphrase, to keys that open her private key.
+        const check = await unlockAccount(m.keys, m.wrappedAccountKey);
+        await unwrapPrivateKey(s.user.wrappedPrivateKey, check.masterKey);
+        body = { authKey: keys.authKey, newAuthKey: m.authKey, kdfSalt: m.kdfSalt, kdfIterations: m.kdfIterations, wrappedAccountKey: m.wrappedAccountKey };
+      } finally {
+        as.fill(0);
+      }
+      onProgress?.('contacting');
+      let res;
+      try {
+        res = await api.changePassphrase(body);
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'invalid_credentials') throw new SessionError('That passphrase isn’t right. Nothing was changed.');
+        if (e instanceof ApiError && e.code === 'passphrase_changed')
+          throw new SessionError('Your passphrase was changed somewhere else just now, so nothing was changed here. Sign out and back in with the newest one.');
+        throw e;
+      }
+      if (sessionRef.current === s) {
+        const updated = { ...s, user: res.user };
+        sessionRef.current = updated;
+        setSession(updated);
+      }
+      return { endedSessions: res.endedSessions };
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const signOutOtherSessions = useCallback<SessionCtx['signOutOtherSessions']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase, 'That passphrase isn’t right. No one was signed out.');
+      as.fill(0);
+      onProgress?.('contacting');
+      try {
+        return await api.revokeOtherSessions({ authKey: keys.authKey });
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'invalid_credentials') throw new SessionError('That passphrase isn’t right. No one was signed out.');
         throw e;
       }
     },
@@ -575,6 +647,7 @@ export function SessionProvider({
   );
 
   const logout = useCallback(async () => {
+    leavingRef.current = true;
     try {
       if (tokenRef.current) await api.logout();
     } catch {
@@ -583,10 +656,15 @@ export function SessionProvider({
     wipeAll();
   }, [api]);
 
-  const lock = useCallback((reason?: 'idle') => {
+  const lock = useCallback((reason?: 'idle' | 'ended') => {
     setLockReason(reason ?? null);
     wipeAll();
   }, []);
+  // Signed out elsewhere (her passphrase changed, "sign out everywhere else") or expired: forget everything here too,
+  // rather than leave a page whose every request fails. Only for the session she still holds (not an old request's).
+  sessionEndedRef.current = (token) => {
+    if (token === tokenRef.current && !leavingRef.current) lock('ended');
+  };
 
   const refreshProfile = useCallback(async () => {
     const s = sessionRef.current;
@@ -655,6 +733,8 @@ export function SessionProvider({
       turnOffRecovery,
       beginRecovery,
       deleteAccount,
+      changePassphrase,
+      signOutOtherSessions,
     }),
     [
       session,
@@ -675,6 +755,8 @@ export function SessionProvider({
       turnOffRecovery,
       beginRecovery,
       deleteAccount,
+      changePassphrase,
+      signOutOtherSessions,
     ],
   );
 

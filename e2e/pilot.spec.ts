@@ -310,6 +310,58 @@ test('pilot 2e. part of her space doesn’t match what she saved: she reads and 
   await signOut(page);
 });
 
+test('pilot 2f. she changes her passphrase: her other device is signed out, the old one stops working, her draft and sealed version still open', async ({ page, browser }, testInfo) => {
+  const alias = `wren-newpass-${RUN}`;
+  await registerSurvivor(page, alias);
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  await storySafety(page, 'Yes');
+  await addToStory(page, 'SEALED before the change.');
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await sealFromReview(page);
+
+  // the same account open on a second device
+  const other = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+  const page2 = await other.newPage();
+  await signIn(page2, alias, SURVIVOR_PASS);
+
+  // Home → Your data → Passphrase and devices
+  await nav(page, 'Home');
+  await page.getByTestId('passphrase-link').click();
+  await expect(page.getByTestId('passphrase-title')).toHaveText('Passphrase and devices');
+  await expect(page.getByTestId('session-list').locator('li')).toHaveCount(2, { timeout: 30_000 });
+  await expect(page.getByTestId('change-caveat')).toContainText('may have kept a copy of the key that unlocks it');
+  await page.getByTestId('change-current').fill(SURVIVOR_PASS);
+  await page.getByRole('button', { name: 'Use this passphrase' }).click();
+  const newPass = await page.getByTestId('change-new').inputValue();
+  expect(newPass.split('-')).toHaveLength(6);
+  await page.getByTestId('change-new-again').fill(newPass);
+  await page.getByTestId('change-submit').click();
+  await expect(page.getByTestId('change-done')).toContainText('1 other session was signed out', { timeout: 90_000 });
+  await expect(page.getByTestId('session-list').locator('li')).toHaveCount(1);
+
+  // the other device: its next request is refused, and it forgets everything and says why
+  await nav(page2, 'My story');
+  await expect(page2.getByTestId('signin-ended')).toBeVisible({ timeout: 60_000 });
+  await other.close();
+
+  // the old passphrase no longer opens it; the new one does, to the same draft and seal
+  await signOut(page);
+  await page.getByRole('link', { name: 'Sign in' }).first().click();
+  await page.getByLabel('Alias').fill(alias);
+  await page.getByLabel('Passphrase').fill(SURVIVOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
+  await signIn(page, alias, newPass);
+  await expect(page.getByTestId('tile-story')).toContainText('Sealed and safe', { timeout: 60_000 });
+  await expect(page.getByTestId('home-activity')).toContainText('You changed your passphrase');
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  // her draft slot (opaque name from the unchanged account secret) still opens, at the sealed version
+  await expect(page.locator('.space-journal .space-entry-text')).toHaveText(['SEALED before the change.']);
+  await signOut(page);
+});
+
 test('pilot 3. the attorney opens and verifies what she shared', async ({ page }) => {
   const api = recordApi(page);
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');

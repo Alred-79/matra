@@ -30,6 +30,7 @@ const Brief = page(() => import('./screens/Brief'), 'Brief');
 const Share = page(() => import('./screens/Share'), 'Share');
 const DeleteAccount = page(() => import('./screens/DeleteAccount'), 'DeleteAccount');
 const RecoverySettings = page(() => import('./screens/Recovery'), 'RecoverySettings');
+const ChangePassphrase = page(() => import('./screens/ChangePassphrase'), 'ChangePassphrase');
 const RecoverScreen = page(() => import('./screens/Recovery'), 'RecoverScreen');
 const AttorneyCases = page(() => import('./attorney/Attorney'), 'AttorneyCases');
 const AttorneyCase = page(() => import('./attorney/Attorney'), 'AttorneyCase');
@@ -72,12 +73,14 @@ export function AppRoutes() {
         )}
         <Route path="vault/delete" element={<RequireSession role="survivor"><Lazy><DeleteAccount /></Lazy></RequireSession>} />
         <Route path="vault/recovery" element={<RequireSession role="survivor"><Lazy><RecoverySettings /></Lazy></RequireSession>} />
+        <Route path="vault/passphrase" element={<RequireSession role="survivor"><Lazy><ChangePassphrase /></Lazy></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
         <Route path="attorney/register" element={<AttorneyRegisterScreen />} />
         <Route path="attorney/signin" element={<AttorneySignInScreen />} />
         <Route path="attorney/cases" element={<RequireSession role="attorney"><Lazy><AttorneyCases /></Lazy></RequireSession>} />
         <Route path="attorney/cases/:id" element={<RequireSession role="attorney"><Lazy><AttorneyCase /></Lazy></RequireSession>} />
+        <Route path="attorney/passphrase" element={<RequireSession role="attorney"><Lazy><ChangePassphrase /></Lazy></RequireSession>} />
 
         {__MATRA_MATCHING__ && CounselorPortal && CounselorReport && (
           <>
