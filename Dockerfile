@@ -69,6 +69,10 @@ RUN npm run build && npm prune --omit=dev --no-audit --no-fund \
 
 # ── runtime: non-root, only what the server needs ──
 FROM node:22-slim
+# The runtime defaults to the mode the web app was built with; the server refuses a build made for the other mode
+# (apps/web/dist/matra-build.json), so `-e MATRA_MATCHING=…` can't silently disagree with the build.
+ARG MATRA_MATCHING=""
+ENV MATRA_MATCHING=$MATRA_MATCHING
 ENV NODE_ENV=production \
     PORT=8080 \
     MATRA_DB_PATH=/app/apps/server/data/matra.db

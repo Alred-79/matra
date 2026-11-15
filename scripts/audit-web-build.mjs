@@ -8,9 +8,10 @@
  *   3. JS / CSS / HTML / JSON: every http(s) host named anywhere is on the allowlist below, each with the reason it
  *      appears; nothing on the tracker list appears at all. A new host fails the build until someone looks at it.
  *
- *   4. Sealed matching left out (MATRA_MATCHING=off, the pilot default; `--matching=on|off` overrides the variable):
- *      no matching, escrow, counselor or report API route, no OPRF code, no matching or counselor screen route. A
- *      build with MATRA_MATCHING=on skips this check. (Tree-shaking can leave an empty chunk behind, named after a
+ *   4. Sealed matching left out of a MATRA_MATCHING=off build (the pilot): no matching, escrow, counselor or report API
+ *      route, no OPRF code, no matching or counselor screen route. The mode is read from the build itself
+ *      (matra-build.json, written by apps/web/vite.config.ts), never from this shell's environment; a build without it
+ *      fails. A build made with MATRA_MATCHING=on skips this check. (Tree-shaking can leave an empty chunk behind, named after a
  *      module it emptied; what counts is that none of these strings is in any shipped file.)
  *
  * Hosts in shipped code are not the same as requests: the CSP (apps/server/src/app.ts WEB_CSP) is what stops the
@@ -22,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) || path.join(ROOT, 'apps/web/dist'));
+const DIST = path.resolve(process.argv[2] || path.join(ROOT, 'apps/web/dist'));
 
 /** host → why it may appear in shipped code. None of these is fetched by the app. */
 const ALLOWED_HOSTS = {
@@ -58,16 +59,21 @@ const MATCHING_ONLY = [
   '/api/matching', '/api/escrow', '/api/counselor', '/api/report-requests', '/api/report-releases', 'oprf',
   'vault/matching', 'vault/requests', 'counselor/matches', 'counselor/reports',
 ];
-const matchingArg = process.argv.find((a) => a.startsWith('--matching='))?.slice('--matching='.length);
-const matchingMode = (matchingArg ?? process.env.MATRA_MATCHING ?? '').trim().toLowerCase() || 'off';
-if (matchingMode !== 'off' && matchingMode !== 'on') {
-  console.error(`[audit-web] MATRA_MATCHING (or --matching=) must be "off" or "on", got "${matchingMode}"`);
-  process.exit(1);
-}
-
 const problems = [];
 if (!fs.existsSync(DIST)) {
   console.error(`[audit-web] ${DIST} does not exist; build the web app first.`);
+  process.exit(1);
+}
+
+/** The MATRA_MATCHING this build was made with, from its own matra-build.json. */
+let matchingMode;
+try {
+  matchingMode = JSON.parse(fs.readFileSync(path.join(DIST, 'matra-build.json'), 'utf8')).matching;
+} catch {
+  matchingMode = undefined;
+}
+if (matchingMode !== 'off' && matchingMode !== 'on') {
+  console.error(`[audit-web] ${DIST}/matra-build.json is missing or doesn't say "off" or "on": rebuild with apps/web/vite.config.ts.`);
   process.exit(1);
 }
 

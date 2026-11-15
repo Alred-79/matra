@@ -156,8 +156,24 @@ export function assertProductionPins(o: {
     );
 }
 
+/**
+ * Writes `matra-build.json` ({ "matching": "off" | "on" }) next to index.html, so the server can refuse to serve a build
+ * made for the other mode (apps/server/src/matching-off.ts) and the bundle audit checks the build it is given, not
+ * whatever MATRA_MATCHING its own shell has (scripts/audit-web-build.mjs).
+ */
+export const BUILD_INFO_FILE = 'matra-build.json';
+function matraBuildInfo(): Plugin {
+  return {
+    name: 'matra:build-info',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: BUILD_INFO_FILE, source: JSON.stringify({ matching: MATCHING_IN_BUILD ? 'on' : 'off' }) + '\n' });
+    },
+  };
+}
+
 const config = {
-  plugins: [react()],
+  plugins: [react(), matraBuildInfo()],
   define: {
     // a build without sealed matching carries only the org key (attorney directory), not the OPRF pin fields
     __MATRA_MATCH_PINS__: JSON.stringify(MATCHING_IN_BUILD ? matchPins : { rosterKey: matchPins.rosterKey }),

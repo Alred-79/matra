@@ -133,9 +133,11 @@ from the paper (no AGPL code copied) with modern standard primitives. Code: `pac
 **Off by default for the pilot.** All of this runs only with `MATRA_MATCHING=on`. With `MATRA_MATCHING=off` (the pilot
 setting; production must set one or the other) the web build contains none of it: no matching questions, screens, OPRF
 client or matching API calls (`scripts/audit-web-build.mjs` fails the build if their route strings appear). The app
-server loads no key share, phone key or matcher, writes nothing to `matching_meta`, answers 404 `matching_disabled` on
+server loads no key share, phone key or matcher, writes no matching state (`matching_meta` then holds only the
+org-signed attorney directory and an empty roster, written by the admin tools), answers 404 `matching_disabled` on
 every matching, escrow, counselor and report route, refuses counselor sign-ups, and refuses to start if a matching
-secret is configured (`apps/server/src/matching-off.ts`). Nothing in a survivor's record opts into matching
+secret is configured (`apps/server/src/matching-off.ts`). The build records its mode (`matra-build.json`) and the server
+refuses to serve a build made for the other one. Nothing in a survivor's record opts into matching
 (`escrowOptIn` is always false).
 
 **Parties.** Survivor client · OPRF key holders 1..m (any t of them; default 2-of-3) · app server (stores ciphertext and tags, no

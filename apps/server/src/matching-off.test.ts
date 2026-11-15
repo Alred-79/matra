@@ -17,11 +17,15 @@ import { createApp, getDb } from './app.js';
 import {
   MATCHING_ONLY_VARS,
   MATCHING_ROUTE_PREFIXES,
+  WEB_BUILD_INFO,
   checkLeftoverMatchingRows,
   loadMatchingMode,
   matchingOnlyVarsSet,
 } from './matching-off.js';
-import { TEST_PEPPER, createRecord, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
+import { TEST_PEPPER, createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
+import { checkAttorneyKey, generateRosterKey, toBase64 } from '@matra/crypto';
+import type { AttorneysResponse } from '@matra/shared';
+import { signOrgLists, storeOrgLists } from './org-signing.js';
 
 const DISABLED = { error: 'Sealed matching isn’t part of this service.', code: 'matching_disabled' };
 
@@ -203,6 +207,11 @@ describe('MATRA_MATCHING at startup (loadMatchingMode)', () => {
       'MATRA_ATTESTATION_PLATFORM_KEY',
       'MATRA_PHONE_HASH_KEY',
       'MATRA_PHONE_HASH_KEY_FILE',
+      'MATRA_SMS_PROVIDER',
+      'TWILIO_AUTH_TOKEN',
+      'TWILIO_ACCOUNT_SID',
+      'MATRA_OPRF_KEY_A',
+      'MATRA_OPRF_KEY_B_FILE',
     ];
     for (const v of vars) {
       expect(MATCHING_ONLY_VARS.some((re) => re.test(v))).toBe(true);
@@ -275,4 +284,53 @@ describe('the real server process (src/index.ts) in production', () => {
     expect(secret.code).not.toBe(0);
     expect(secret.output).toMatch(/MATRA_MATCHING is off, but MATRA_OPRF_SHARE_1 is set/);
   }, 60_000);
+});
+
+describe('matching off: the web build must be an off build too', () => {
+  const webDir = (matching?: string) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-webmode-'));
+    onTestFinished(() => fs.rmSync(d, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(d, 'index.html'), '<!doctype html><html><head></head><body></body></html>');
+    if (matching !== undefined) fs.writeFileSync(path.join(d, WEB_BUILD_INFO), matching);
+    return d;
+  };
+
+  it('an off server refuses an on build; an on server refuses an off build; matching pairs are served', async () => {
+    const on = webDir('{"matching":"on"}');
+    const off = webDir('{"matching":"off"}');
+    expect(() => createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, webDir: on })).toThrow(
+      /built with MATRA_MATCHING=on, but this server runs with MATRA_MATCHING=off/,
+    );
+    expect(() => createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, webDir: off, matching: {} })).toThrow(
+      /built with MATRA_MATCHING=off, but this server runs with MATRA_MATCHING=on/,
+    );
+    const ok = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, webDir: off });
+    expect((await request(ok).get('/')).status).toBe(200);
+    expect(() => createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, webDir: on, matching: {} })).not.toThrow();
+  });
+
+  it('refuses a build that does not say which mode it is', () => {
+    for (const d of [webDir(), webDir('not json'), webDir('{"matching":"maybe"}'), webDir('{}')])
+      expect(() => createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, webDir: d })).toThrow(/MATRA_MATCHING is unknown|must be "off" or "on"/);
+  });
+});
+
+describe('matching off: the pilot still shares through the org-signed attorney directory', () => {
+  it('a signed directory with no counselors is stored and a pinned client confirms the attorney', async () => {
+    const { app, db } = makeApp();
+    const jane = await registerUser(app, 'jane.pilotdir');
+    const atty = await registerUser(app, 'atty.pilotdir', 'attorney', { profile: { ...defaultProfile, displayName: 'Pilot Counsel' } });
+    const org = generateRosterKey();
+    const lists = signOrgLists(db, org.secretKey);
+    expect(lists.counselors).toEqual([]);
+    storeOrgLists(db, lists);
+    // what matching_meta holds when off: the two org-signed lists, nothing from matching
+    expect((db.prepare('SELECT key FROM matching_meta ORDER BY key').all() as Array<{ key: string }>).map((r) => r.key)).toEqual([
+      'attorney_directory',
+      'counselor_roster',
+    ]);
+    const res = (await request(app).get('/api/attorneys').set(jane.auth)).body as AttorneysResponse;
+    const listed = res.attorneys.find((a) => a.userId === atty.user.id)!;
+    expect(checkAttorneyKey(res.directory, listed, toBase64(org.publicKey))).toMatchObject({ status: 'verified', displayName: 'Pilot Counsel' });
+  });
 });

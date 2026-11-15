@@ -11,6 +11,8 @@
  *   - leftover matching rows in the database (from an earlier "on") are a warning in development and a refusal in
  *     production, so an operator can't switch matching off without deciding what happens to people's sealed entries.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { parseMatchingMode, type MatchingMode } from '@matra/shared';
 import type { DB } from './db.js';
@@ -20,15 +22,19 @@ export const MATCHING_ROUTE_PREFIXES = ['/api/matching', '/api/escrow', '/api/co
 
 /**
  * Environment variables only sealed matching reads. Any of them set (non-empty) with MATRA_MATCHING=off is refused:
- * the OPRF key shares and holder settings, the holder-token key, the matcher and its keys, and the phone-token key.
+ * the OPRF key shares (and the retired additive keys) and holder settings, the holder-token key, the matcher and its
+ * keys, the phone-token key, and the SMS provider (Twilio) used only by the matching phone step.
  */
 export const MATCHING_ONLY_VARS: RegExp[] = [
   /^MATRA_OPRF_SHARE/, // MATRA_OPRF_SHARE_<i>, _<i>_FILE, MATRA_OPRF_SHARE_PUBKEYS
+  /^MATRA_OPRF_KEY_[AB](_FILE)?$/, // the retired additive keys (fatal with matching on too, config.ts)
   /^MATRA_OPRF_HOLDER_URLS$/,
   /^MATRA_HOLDER_TOKEN_KEY/,
   /^MATRA_MATCHER_(URL|KEY|KEY_FILE|TOKEN|TOKEN_FILE)$/,
   /^MATRA_ATTESTATION_PLATFORM_KEY(_FILE)?$/,
   /^MATRA_PHONE_HASH_KEY(_FILE)?$/,
+  /^MATRA_SMS_/, // the SMS provider and its caps: only the matching phone step sends codes
+  /^TWILIO_/,
 ];
 
 type Env = Record<string, string | undefined>;
@@ -92,4 +98,37 @@ export function checkLeftoverMatchingRows(db: DB, production: boolean): void {
     `and ${reportReleases} report release${reportReleases === 1 ? '' : 's'} from when matching was on. They stay untouched and unreachable.`;
   if (production) throw new Error(`${msg} Refusing to start in production: decide what happens to them first (docs/DEPLOY.md).`);
   console.warn(`[matra] WARNING: ${msg}`);
+}
+
+/** Written by the web build next to index.html (apps/web/vite.config.ts BUILD_INFO_FILE). */
+export const WEB_BUILD_INFO = 'matra-build.json';
+
+/**
+ * The MATRA_MATCHING a built web app was made with. Throws if the build has no (or an unreadable) matra-build.json: a
+ * build from before the switch existed, or one not made by `vite build`, can't be shown to match this server.
+ */
+export function webBuildMatching(webDir: string): MatchingMode {
+  const file = path.join(webDir, WEB_BUILD_INFO);
+  let mode: MatchingMode | undefined;
+  try {
+    mode = parseMatchingMode((JSON.parse(fs.readFileSync(file, 'utf8')) as { matching?: string }).matching);
+  } catch {
+    mode = undefined;
+  }
+  if (!mode) throw new Error(`The web app in ${webDir} has no readable ${WEB_BUILD_INFO}, so its MATRA_MATCHING is unknown. Rebuild it (npm run build).`);
+  return mode;
+}
+
+/**
+ * Refuse to serve a web build made for the other mode. An "on" build in front of an "off" server would still ask her the
+ * sealed-match questions and seal escrowOptIn: true into her record; an "off" build in front of an "on" server would
+ * leave every matching route live with no app that explains it.
+ */
+export function assertWebBuildMatches(webDir: string, server: MatchingMode): void {
+  const built = webBuildMatching(webDir);
+  if (built !== server)
+    throw new Error(
+      `The web app in ${webDir} was built with MATRA_MATCHING=${built}, but this server runs with MATRA_MATCHING=${server}. ` +
+        'Build and run with the same value.',
+    );
 }

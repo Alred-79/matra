@@ -98,7 +98,7 @@ import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimi
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
 import { INSPECTOR_ROUTE, RequestRecorder, appProcess, fetchProcess, findInDb } from './inspector.js';
-import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, checkLeftoverMatchingRows, matchingDisabled } from './matching-off.js';
+import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, assertWebBuildMatches, checkLeftoverMatchingRows, matchingDisabled } from './matching-off.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
@@ -2448,7 +2448,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.status(404).json({ error: 'Not found', code: 'not_found' });
   });
 
-  if (opts.webDir) mountWebApp(app, opts.webDir, !!opts.demoBanner);
+  if (opts.webDir) {
+    // the build's own MATRA_MATCHING must be this server's (matching-off.ts)
+    assertWebBuildMatches(opts.webDir, mopts ? 'on' : 'off');
+    mountWebApp(app, opts.webDir, !!opts.demoBanner);
+  }
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code });
