@@ -55,7 +55,7 @@ describe('buildDataExport', () => {
       ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(recKey, masterKey),
     };
     // her draft slot: what she is still adding to
-    const slot = { name: await slotName(masterKey, 'draft'), ...(await sealSlot({ kind: 'draft', slotVersion: 1, draft: { answers: { 'about.name': 'Wren' } }, evidence: [], savedAt: '2026-09-01T00:00:00Z' }, masterKey)), seq: 4, updatedDay: '2026-09-01' };
+    const slot = { name: await slotName(masterKey, 'draft'), ...(await sealSlot({ kind: 'draft', slotVersion: 1, draft: { answers: { 'about.name': 'Wren' } }, evidence: [], savedAt: '2026-09-01T00:00:00Z' }, masterKey)), version: '4'.repeat(32), updatedDay: '2026-09-01' };
     const fake = {
       listRecords: async () => ({ records: [rec] }),
       getRecord: async () => ({ record: rec }),
@@ -88,7 +88,7 @@ describe('buildDataExport', () => {
     expect(manifest.problems).toEqual([]);
     expect(records.unreadableRecords).toBe(0);
     const draft = JSON.parse(new TextDecoder().decode(files.get('draft.json')));
-    expect(draft.draft).toMatchObject({ kind: 'draft', draft: { answers: { 'about.name': 'Wren' } }, savedAt: '2026-09-01T00:00:00Z', savedOnDay: '2026-09-01', saves: 4 });
+    expect(draft.draft).toMatchObject({ kind: 'draft', draft: { answers: { 'about.name': 'Wren' } }, savedAt: '2026-09-01T00:00:00Z', savedOnDay: '2026-09-01' });
     expect(readme).toMatch(/draft\.json\s+Your current draft/);
   });
 

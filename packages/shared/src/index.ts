@@ -913,11 +913,11 @@ export interface ApiError { error: string; code?: string }
  GET    /api/vault/blobs                              -> { blobs: BlobMeta[] }
  GET    /api/vault/blobs/:id                          -> octet-stream (owner, or attorney with active share covering it)
  GET    /api/vault/slots/:name                        -> GetSlotResponse (survivor; slot null when none; name = 64 hex)
- PUT    /api/vault/slots/:name  PutSlotRequest        -> PutSlotResponse (survivor; 409 slot_conflict when expectedSeq is
+ PUT    /api/vault/slots/:name  PutSlotRequest        -> PutSlotResponse (survivor; 409 slot_conflict when expectedVersion is
                                                          stale; 400 when the ciphertext isn't whole 16 KiB buckets;
                                                          never a ledger entry or audit row, except that
                                                          MATRA_DRAFT_MODE=keep-versions also files it as a record)
- DELETE /api/vault/slots/:name  { expectedSeq? }      -> { ok: true } (survivor; 409 slot_conflict when stale)
+ DELETE /api/vault/slots/:name  { expectedVersion? }  -> { ok: true } (survivor; 409 slot_conflict when stale)
 
  GET    /api/ledger/entries/:id                       -> { entry: LedgerEntry }
  GET    /api/ledger/verify                            -> LedgerVerifyResponse

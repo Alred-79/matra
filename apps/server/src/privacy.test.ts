@@ -187,7 +187,7 @@ describe('no client IP or user agent on disk or in logs (W11)', () => {
     expect((await request(app).post('/api/auth/login').send({ username: a.user.username, authKey: a.authKey })).status).toBe(200);
     expect((await createRecord(app, a)).res.status).toBe(201);
     const draftSlot = `/api/vault/slots/${await slotName(a.masterKey, 'draft')}`;
-    expect((await request(app).put(draftSlot).set(a.auth).send({ ...(await sealSlot({ words: 'draft' }, a.masterKey)), expectedSeq: 0 })).status).toBe(200);
+    expect((await request(app).put(draftSlot).set(a.auth).send({ ...(await sealSlot({ words: 'draft' }, a.masterKey)), expectedVersion: null })).status).toBe(200);
     expect((await request(app).get(draftSlot).set(a.auth)).status).toBe(200);
     expect((await uploadBlob(app, a)).res.status).toBe(201);
     expect((await verifyPhone(app, a)).status).toBe(200);

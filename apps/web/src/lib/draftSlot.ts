@@ -1,8 +1,9 @@
 /**
  * Her draft, in its draft slot (packages/shared/src/slots.ts): one encrypted envelope, saved over as she writes, never a
- * ledger entry. Sealing writes a WORM 'final' record holding only `{kind, record, savedAt}` (lib/vault.ts sealPayload)
- * and then writes the slot once more with `sealedRecordId` and without unsent text, so she resumes from it to add to a
- * sealed version later. Any later save drops `sealedRecordId`: the draft then has changes the seal doesn't.
+ * ledger entry. Sealing (lib/sealStory.ts) saves the slot first, then writes a WORM 'final' record holding only
+ * `{kind, record, savedAt}` (lib/vault.ts sealPayload), then marks the slot with `sealedRecordId`, so she resumes from it
+ * to add to a sealed version later. Her unsent text stays in the slot. Any later save drops `sealedRecordId`: the draft
+ * then has changes the seal doesn't.
  *
  * The slot is the only place her answers, unsent text and (with sealed matching on) the fingerprints of identifiers
  * already sealed for matching are kept. None of it is ever shared: a share or report release wraps the key of a sealed
@@ -34,7 +35,8 @@ export interface DraftSlot {
 
 export interface LoadedDraftSlot {
   value: DraftSlot;
-  seq: number;
+  /** the slot's version tag (a save must name it) */
+  version: string;
   updatedDay: string;
 }
 
@@ -43,13 +45,14 @@ export interface DraftSlotState {
   slot: LoadedDraftSlot | null;
   /** her slot is stored but didn't open: nothing may be saved over it unless she chooses to */
   unreadable: boolean;
-  /** the seq a save must name (that of an unreadable slot too) */
-  seq: number;
+  /** the version a save must name (that of an unreadable slot too); null when she has no slot */
+  version: string | null;
   draftMode: DraftMode;
 }
 
-/** A save named a seq that is no longer current: her draft was saved from another device or tab since this one read it. */
+/** A save named a version that is no longer current: her draft was saved from another device or tab since this one read it. */
 export class SlotConflictError extends Error {
+  readonly friendly = true;
   constructor() {
     super('A newer version of your draft was saved from another device or tab.');
     this.name = 'SlotConflictError';
@@ -101,38 +104,36 @@ function forThisBuild(v: DraftSlot): DraftSlot {
   return { ...rest, ...(rest.draft && { draft: withoutMatchingAnswers(rest.draft) }) };
 }
 
-/** The draft without anything she hadn't sent yet (an answer box, the "Start anywhere" box, an open topic). */
-export function withoutUnsent(draft: IntakeDraft): IntakeDraft {
-  const { pending: _p, ...rest } = draft;
-  if (!rest.space) return rest;
-  const { composer: _c, pending: _sp, ...space } = rest.space;
-  return { ...rest, space };
-}
-
 /** Read her draft slot. Network and server errors throw; a slot that doesn't open is reported, not thrown. */
 export async function loadDraftSlot(api: ApiClient, masterKey: CryptoKey): Promise<DraftSlotState> {
   const res = await api.getSlot(await slotName(masterKey, DRAFT_SLOT));
   setDraftMode(res.draftMode);
-  if (!res.slot) return { slot: null, unreadable: false, seq: 0, draftMode: res.draftMode };
+  if (!res.slot) return { slot: null, unreadable: false, version: null, draftMode: res.draftMode };
   try {
     const value = await openSlot<DraftSlot>(res.slot, masterKey);
     if (value?.kind !== 'draft' || !Array.isArray(value.evidence)) throw new Error('not a draft slot');
-    return { slot: { value: forThisBuild(value), seq: res.slot.seq, updatedDay: res.slot.updatedDay }, unreadable: false, seq: res.slot.seq, draftMode: res.draftMode };
+    return {
+      slot: { value: forThisBuild(value), version: res.slot.version, updatedDay: res.slot.updatedDay },
+      unreadable: false,
+      version: res.slot.version,
+      draftMode: res.draftMode,
+    };
   } catch {
-    return { slot: null, unreadable: true, seq: res.slot.seq, draftMode: res.draftMode };
+    return { slot: null, unreadable: true, version: res.slot.version, draftMode: res.draftMode };
   }
 }
 
 /**
- * Save her draft over the slot, if `expectedSeq` is still its seq (0 = she has none yet). Returns the new seq.
+ * Save her draft over the slot, if `expectedVersion` is still its version (null = she has none yet). Returns the new
+ * version (a random tag, so nothing counts her saves).
  * Throws SlotConflictError when another device or tab saved first.
  */
 export async function saveDraftSlot(
   api: ApiClient,
   masterKey: CryptoKey,
   content: Omit<DraftSlot, 'kind' | 'slotVersion' | 'savedAt'>,
-  expectedSeq: number,
-): Promise<{ seq: number; savedAt: string }> {
+  expectedVersion: string | null,
+): Promise<{ version: string; savedAt: string }> {
   const savedAt = new Date().toISOString();
   const value = forThisBuild({ kind: 'draft', slotVersion: 1, ...content, savedAt });
   const sealed = await sealSlot(value, masterKey);
@@ -142,9 +143,9 @@ export async function saveDraftSlot(
     `Encrypted here and padded to a 16 KiB step (${sealed.envelope.ct.length} base64 characters). The server keeps only this newest copy, under a name it can't read, with no ledger entry.`,
   );
   try {
-    const res = await api.putSlot(await slotName(masterKey, DRAFT_SLOT), { ...sealed, expectedSeq });
+    const res = await api.putSlot(await slotName(masterKey, DRAFT_SLOT), { ...sealed, expectedVersion });
     setDraftMode(res.draftMode);
-    return { seq: res.seq, savedAt };
+    return { version: res.version, savedAt };
   } catch (e) {
     if (e instanceof ApiError && e.status === 409 && e.code === 'slot_conflict') throw new SlotConflictError();
     throw e;
@@ -160,13 +161,13 @@ export async function updateDraftSlot(
   api: ApiClient,
   masterKey: CryptoKey,
   change: (current: DraftSlot | null) => Omit<DraftSlot, 'kind' | 'slotVersion' | 'savedAt'>,
-): Promise<{ seq: number; value: Omit<DraftSlot, 'kind' | 'slotVersion' | 'savedAt'> }> {
+): Promise<{ version: string; value: Omit<DraftSlot, 'kind' | 'slotVersion' | 'savedAt'> }> {
   for (let attempt = 0; ; attempt++) {
     const cur = await loadDraftSlot(api, masterKey);
     if (cur.unreadable) throw new UnreadableDraftError();
     const value = change(cur.slot?.value ?? null);
     try {
-      return { seq: (await saveDraftSlot(api, masterKey, value, cur.seq)).seq, value };
+      return { version: (await saveDraftSlot(api, masterKey, value, cur.version)).version, value };
     } catch (e) {
       if (!(e instanceof SlotConflictError) || attempt >= 1) throw e;
     }
@@ -175,6 +176,7 @@ export async function updateDraftSlot(
 
 /** Her draft slot is stored but didn't open, so nothing is saved over it. */
 export class UnreadableDraftError extends Error {
+  readonly friendly = true;
   constructor() {
     super('We couldn’t open your saved draft just now. It is still stored. You could try again in a moment, or sign out and back in.');
     this.name = 'UnreadableDraftError';

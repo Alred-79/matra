@@ -48,8 +48,11 @@ export interface Session {
 export interface WorkingData {
   draft: IntakeDraft | null;
   evidence: EvidenceItem[];
-  /** seq of her draft slot this was loaded from / last saved as (a save must name it: lib/draftSlot.ts) */
-  slotSeq?: number;
+  /**
+   * version of her draft slot this was loaded from / last saved as (a save must name it: lib/draftSlot.ts); null when
+   * she had no slot, undefined when not known
+   */
+  slotVersion?: string | null;
 }
 
 export type Progress = 'deriving' | 'generating' | 'contacting' | 'unlocking';
@@ -676,6 +679,8 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 
 export function friendlyError(e: unknown): string {
   if (e instanceof SessionError || e instanceof UnreadableVaultError) return e.message;
+  // errors written for her to read (lib/draftSlot.ts, lib/sealStory.ts)
+  if (e instanceof Error && (e as { friendly?: boolean }).friendly) return e.message;
   if (e instanceof ApiError) {
     // 409 from register is the alias; other conflicts (e.g. phone_limit_reached) carry their own message
     if (e.status === 409 && (!e.code || e.code === 'username_taken')) return 'Someone already uses that alias. Please try another one.';

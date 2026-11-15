@@ -137,7 +137,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
       name: 'draft.json',
       data: json({
         exportedAt: at,
-        draft: slot.slot ? { ...slot.slot.value, savedOnDay: slot.slot.updatedDay, saves: slot.slot.seq } : null,
+        draft: slot.slot ? { ...slot.slot.value, savedOnDay: slot.slot.updatedDay } : null,
         draftUnreadable: slot.unreadable,
       }),
       date: now,

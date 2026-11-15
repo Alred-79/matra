@@ -11,7 +11,6 @@ import {
   setDraftMode,
   updateDraftSlot,
   withoutMatchingAnswers,
-  withoutUnsent,
 } from './draftSlot';
 
 const g = globalThis as { __MATRA_MATCHING__?: boolean };
@@ -20,6 +19,9 @@ afterEach(() => {
   g.__MATRA_MATCHING__ = initial;
   setDraftMode('slot');
 });
+
+let versions = 0;
+const newVersion = () => (++versions).toString(16).padStart(32, '0');
 
 /** The slot routes, in memory, with the server's compare-and-swap. */
 function slotServer(draftMode: DraftMode = 'slot') {
@@ -35,10 +37,10 @@ function slotServer(draftMode: DraftMode = 'slot') {
       beforePut = undefined;
       puts.push({ name, req });
       const cur = slots.get(name);
-      if ((cur?.seq ?? 0) !== req.expectedSeq) throw new ApiError(409, 'A newer draft was saved from another device or tab.', 'slot_conflict');
-      const seq = (cur?.seq ?? 0) + 1;
-      slots.set(name, { name, envelope: req.envelope, wrappedKey: req.wrappedKey, seq, updatedDay: '2026-11-14' });
-      return { seq, updatedDay: '2026-11-14', draftMode };
+      if ((cur?.version ?? null) !== req.expectedVersion) throw new ApiError(409, 'A newer draft was saved from another device or tab.', 'slot_conflict');
+      const version = newVersion();
+      slots.set(name, { name, envelope: req.envelope, wrappedKey: req.wrappedKey, version, updatedDay: '2026-11-14' });
+      return { version, updatedDay: '2026-11-14', draftMode };
     },
   } as unknown as ApiClient;
   return { api, slots, puts, onNextPut: (f: () => void) => (beforePut = f) };
@@ -49,13 +51,13 @@ const withAnswers = (answers: Record<string, unknown>, extra: Partial<IntakeDraf
   ({ ...emptyDraft(), answers, ...extra }) as IntakeDraft;
 
 describe('draft slot', () => {
-  it('saves over one opaque, padded slot and reads it back; the seq moves on with each save', async () => {
+  it('saves over one opaque, padded slot and reads it back; the version changes with each save', async () => {
     const { masterKey } = await keys();
     const { api, slots, puts } = slotServer();
     const draft = withAnswers({ 'about.name': 'J' });
-    const first = await saveDraftSlot(api, masterKey, { draft, evidence: [] }, 0);
-    const second = await saveDraftSlot(api, masterKey, { draft: withAnswers({ 'about.name': 'J.' }), evidence: [] }, first.seq);
-    expect([first.seq, second.seq]).toEqual([1, 2]);
+    const first = await saveDraftSlot(api, masterKey, { draft, evidence: [] }, null);
+    const second = await saveDraftSlot(api, masterKey, { draft: withAnswers({ 'about.name': 'J.' }), evidence: [] }, first.version);
+    expect(second.version).not.toBe(first.version);
     expect(slots.size).toBe(1);
     const name = await slotName(masterKey, 'draft');
     expect([...slots.keys()]).toEqual([name]);
@@ -63,33 +65,33 @@ describe('draft slot', () => {
     for (const p of puts) expect(fromBase64(p.req.envelope.ct).length % SLOT_BUCKET_BYTES).toBe(0);
 
     const loaded = await loadDraftSlot(api, masterKey);
-    expect(loaded).toMatchObject({ unreadable: false, seq: 2, draftMode: 'slot' });
+    expect(loaded).toMatchObject({ unreadable: false, version: second.version, draftMode: 'slot' });
     expect(loaded.slot!.value).toMatchObject({ kind: 'draft', slotVersion: 1, draft: { answers: { 'about.name': 'J.' } }, evidence: [] });
   });
 
   it('a save from a stale page is refused with SlotConflictError, and the newer draft stays', async () => {
     const { masterKey } = await keys();
     const { api } = slotServer();
-    await saveDraftSlot(api, masterKey, { draft: withAnswers({ v: 'laptop' }), evidence: [] }, 0); // seq 1
-    await saveDraftSlot(api, masterKey, { draft: withAnswers({ v: 'laptop again' }), evidence: [] }, 1); // seq 2
-    await expect(saveDraftSlot(api, masterKey, { draft: withAnswers({ v: 'phone' }), evidence: [] }, 1)).rejects.toBeInstanceOf(SlotConflictError);
+    const v1 = (await saveDraftSlot(api, masterKey, { draft: withAnswers({ v: 'laptop' }), evidence: [] }, null)).version;
+    await saveDraftSlot(api, masterKey, { draft: withAnswers({ v: 'laptop again' }), evidence: [] }, v1);
+    // the phone read v1 too
+    await expect(saveDraftSlot(api, masterKey, { draft: withAnswers({ v: 'phone' }), evidence: [] }, v1)).rejects.toBeInstanceOf(SlotConflictError);
     expect((await loadDraftSlot(api, masterKey)).slot!.value.draft!.answers).toEqual({ v: 'laptop again' });
   });
 
   it('updateDraftSlot reads again once after a conflict, so a file detail lands on the newest draft', async () => {
     const { masterKey } = await keys();
     const server = slotServer();
-    await saveDraftSlot(server.api, masterKey, { draft: withAnswers({ v: 'one' }), evidence: [] }, 0);
+    await saveDraftSlot(server.api, masterKey, { draft: withAnswers({ v: 'one' }), evidence: [] }, null);
     // another tab saves between this read and this write
     const two = await sealSlot({ kind: 'draft', slotVersion: 1, draft: withAnswers({ v: 'two' }), evidence: [], savedAt: 'x' }, masterKey);
     const name = await slotName(masterKey, 'draft');
-    server.onNextPut(() => server.slots.set(name, { name, ...two, seq: 2, updatedDay: '2026-11-14' }));
+    server.onNextPut(() => server.slots.set(name, { name, ...two, version: newVersion(), updatedDay: '2026-11-14' }));
     const file = { id: 'e1', kind: 'photo', fileName: 'a.jpg', mimeType: 'image/jpeg', sizeBytes: 1, sha256: '0'.repeat(64), blobId: 'b1', metadataStripped: true } as const;
-    const { seq } = await updateDraftSlot(server.api, masterKey, (cur) => ({ ...cur!, evidence: [...cur!.evidence, file] }));
+    const { version } = await updateDraftSlot(server.api, masterKey, (cur) => ({ ...cur!, evidence: [...cur!.evidence, file] }));
     expect(server.puts).toHaveLength(3); // the first write, the stale one, the retry
     const now = await loadDraftSlot(server.api, masterKey);
-    expect(now.seq).toBe(seq);
-    expect(seq).toBe(3);
+    expect(now.version).toBe(version);
     expect(now.slot!.value.draft!.answers).toEqual({ v: 'two' });
     expect(now.slot!.value.evidence.map((e) => e.blobId)).toEqual(['b1']);
   });
@@ -97,12 +99,12 @@ describe('draft slot', () => {
   it('a slot that does not open is reported, never treated as empty; updateDraftSlot refuses to save over it', async () => {
     const mine = await keys();
     const { api, slots } = slotServer();
-    await saveDraftSlot(api, mine.masterKey, { draft: withAnswers({ v: 'hers' }), evidence: [] }, 0);
+    const stored = (await saveDraftSlot(api, mine.masterKey, { draft: withAnswers({ v: 'hers' }), evidence: [] }, null)).version;
     // her slot's ciphertext was damaged on the server: it no longer opens
     const name = await slotName(mine.masterKey, 'draft');
     const s = slots.get(name)!;
     slots.set(name, { ...s, envelope: { ...s.envelope, ct: s.envelope.ct.slice(0, -8) + 'AAAAAAA=' } });
-    expect(await loadDraftSlot(api, mine.masterKey)).toMatchObject({ slot: null, unreadable: true, seq: 1 });
+    expect(await loadDraftSlot(api, mine.masterKey)).toMatchObject({ slot: null, unreadable: true, version: stored });
     await expect(updateDraftSlot(api, mine.masterKey, () => ({ evidence: [] }))).rejects.toBeInstanceOf(UnreadableDraftError);
   });
 
@@ -120,7 +122,7 @@ describe('draft slot', () => {
       { 'person.escrow': { p1: 'yes' }, 'person.matchContact': { method: 'text', detail: '555-0100' }, 'about.name': 'J' },
       { pending: { stepId: 'person.matchContact', value: { detail: '555' } }, space: { pending: { 'person.matchContact': { detail: '5' }, 'about.name': 'Je' } } },
     );
-    await saveDraftSlot(api, masterKey, { draft, evidence: [], escrowedHashes: ['h1'] }, 0);
+    await saveDraftSlot(api, masterKey, { draft, evidence: [], escrowedHashes: ['h1'] }, null);
     const v = (await loadDraftSlot(api, masterKey)).slot!.value;
     expect(v.escrowedHashes).toBeUndefined();
     expect(Object.keys(v.draft!.answers)).toEqual(['about.name']);
@@ -134,18 +136,11 @@ describe('draft slot', () => {
     const { masterKey } = await keys();
     const { api } = slotServer();
     const draft = withAnswers({ 'person.matchContact': { method: 'text', detail: '555-0100' } });
-    await saveDraftSlot(api, masterKey, { draft, evidence: [], escrowedHashes: ['h1'] }, 0);
+    await saveDraftSlot(api, masterKey, { draft, evidence: [], escrowedHashes: ['h1'] }, null);
     const v = (await loadDraftSlot(api, masterKey)).slot!.value;
     expect(v.escrowedHashes).toEqual(['h1']);
     expect(withoutMatchingAnswers(draft)).toBe(draft);
     expect(v.draft!.answers).toEqual(draft.answers);
   });
 
-  it('withoutUnsent drops what she had not sent yet, and nothing else', () => {
-    const draft = withAnswers({ 'about.name': 'J' }, { pending: { stepId: 'x', value: 'half' }, space: { mode: 'space', composer: 'typing…', pending: { y: 'z' }, skippedTopics: ['t'] } });
-    const out = withoutUnsent(draft);
-    expect(out.pending).toBeUndefined();
-    expect(out.space).toEqual({ mode: 'space', skippedTopics: ['t'] });
-    expect(out.answers).toEqual({ 'about.name': 'J' });
-  });
 });

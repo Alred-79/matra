@@ -64,19 +64,19 @@ describe('loadVault: records that fail to open are counted, not dropped silently
 
 describe('foldInLateEvidence', () => {
   const draft = { answers: { mine: true } } as unknown as WorkingData['draft'];
-  const story: WorkingData = { draft, evidence: [file('a')], slotSeq: 1 };
+  const story: WorkingData = { draft, evidence: [file('a')], slotVersion: 'v1' };
 
   it('adds files saved after the story opened, keeps her draft, and follows the newer slot save', () => {
-    const mem: WorkingData = { draft: null, evidence: [file('a'), file('b')], slotSeq: 2 };
+    const mem: WorkingData = { draft: null, evidence: [file('a'), file('b')], slotVersion: 'v2' };
     const next = foldInLateEvidence(story, mem)!;
     expect(next.evidence.map((e) => e.blobId)).toEqual(['a', 'b']);
     expect(next.draft).toBe(draft);
-    expect(next.slotSeq).toBe(2);
+    expect(next.slotVersion).toBe('v2');
   });
 
   it('returns null when nothing is new (including the story’s own saves)', () => {
     expect(foldInLateEvidence(story, null)).toBeNull();
-    expect(foldInLateEvidence(story, { ...story, slotSeq: 9 })).toBeNull();
+    expect(foldInLateEvidence(story, { ...story, slotVersion: 'v9' })).toBeNull();
     expect(foldInLateEvidence(story, { draft: null, evidence: [] })).toBeNull();
   });
 
@@ -84,7 +84,7 @@ describe('foldInLateEvidence', () => {
     const mem: WorkingData = { draft: null, evidence: [file('c')] };
     const next = foldInLateEvidence(story, mem)!;
     expect(next.evidence.map((e) => e.blobId)).toEqual(['a', 'c']);
-    expect(next.slotSeq).toBe(1);
+    expect(next.slotVersion).toBe('v1');
   });
 });
 
@@ -144,11 +144,12 @@ describe('sealPayload: a sealed account holds only the record', () => {
 describe('resumeFrom: her draft slot first, then (no slot yet) the records saved before slots', () => {
   const opened = (id: string, createdAt: string, payload: VaultPayload): OpenedRecord =>
     ({ meta: { id, createdAt } as OpenedRecord['meta'], payload, key: {} as CryptoKey, verified: true }) as OpenedRecord;
-  const d = (n: number) => ({ ...emptyDraft(), answers: { n: String(n) } }) as unknown as NonNullable<WorkingData['draft']>;
+  // one fixed time: emptyDraft() stamps startedAt/updatedAt with now, so two calls can straddle a millisecond
+  const d = (n: number) => ({ ...emptyDraft(new Date('2026-01-01T00:00:00Z')), answers: { n: String(n) } }) as unknown as NonNullable<WorkingData['draft']>;
   const record = draftToRecord(emptyDraft());
   const slot = (value: Partial<LoadedDraftSlot['value']>): LoadedDraftSlot => ({
     value: { kind: 'draft', slotVersion: 1, evidence: [], savedAt: '2026-03-01T00:00:00Z', ...value },
-    seq: 3,
+    version: 'v3',
     updatedDay: '2026-03-01',
   });
 

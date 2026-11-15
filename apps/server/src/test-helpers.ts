@@ -19,7 +19,7 @@ import { createApp, getDb, type CreateAppOptions } from './app.js';
 export const TEST_ITERATIONS = 1000;
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-type MakeAppOptions = { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; inspector?: boolean; minKdfIterations?: number };
+type MakeAppOptions = { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; draftsDbPath?: string; inspector?: boolean; minKdfIterations?: number };
 
 /**
  * An app over an in-memory database. Sealed matching is OFF, as in the pilot (MATRA_MATCHING=off), unless the test

@@ -76,7 +76,7 @@ describe('Evidence: saved versions that could not be opened', () => {
   it('saves the file details into her draft slot (never a new record), naming the seq it read', async () => {
     const user = userEvent.setup();
     const base = fakeAuthFetch();
-    let slot: { name: string; envelope: unknown; wrappedKey: unknown; seq: number; updatedDay: string } | null = null;
+    let slot: { name: string; envelope: unknown; wrappedKey: unknown; version: string; updatedDay: string } | null = null;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://x');
       const method = init?.method ?? 'GET';
@@ -85,9 +85,9 @@ describe('Evidence: saved versions that could not be opened', () => {
       if (url.pathname.startsWith('/api/vault/slots/') && method === 'GET') return json(200, { slot, draftMode: 'slot' });
       if (url.pathname.startsWith('/api/vault/slots/') && method === 'PUT') {
         const body = JSON.parse(String(init!.body));
-        if ((slot?.seq ?? 0) !== body.expectedSeq) return json(409, { error: 'stale', code: 'slot_conflict' });
-        slot = { name: url.pathname.split('/').pop()!, envelope: body.envelope, wrappedKey: body.wrappedKey, seq: (slot?.seq ?? 0) + 1, updatedDay: '2026-11-14' };
-        return json(200, { seq: slot.seq, updatedDay: slot.updatedDay, draftMode: 'slot' });
+        if ((slot?.version ?? null) !== body.expectedVersion) return json(409, { error: 'stale', code: 'slot_conflict' });
+        slot = { name: url.pathname.split('/').pop()!, envelope: body.envelope, wrappedKey: body.wrappedKey, version: 'a'.repeat(32), updatedDay: '2026-11-14' };
+        return json(200, { version: slot.version, updatedDay: slot.updatedDay, draftMode: 'slot' });
       }
       if (url.pathname === '/api/vault/blobs' && method === 'GET') return json(200, { blobs: [] });
       if (url.pathname === '/api/vault/blobs' && method === 'POST') {
@@ -115,11 +115,11 @@ describe('Evidence: saved versions that could not be opened', () => {
     expect(await screen.findByText('Saved to your space and added to your draft story.', {}, { timeout: 15_000 })).toBeInTheDocument();
     const posts = fetchImpl.mock.calls.filter(([u, i]) => new URL(String(u), 'http://x').pathname === '/api/vault/records' && i?.method === 'POST');
     expect(posts).toHaveLength(0);
-    expect(slot!.seq).toBe(1);
+    expect(slot!.version).toBe('a'.repeat(32));
     const s = current!.session!;
     const opened = await openSlot<{ kind: string; evidence: Array<{ fileName: string }> }>(slot as never, s.masterKey);
     expect(opened.kind).toBe('draft');
     expect(opened.evidence.map((e) => e.fileName)).toEqual(['note.pdf']);
-    expect((await current!.getWorkingData())?.slotSeq).toBe(1);
+    expect((await current!.getWorkingData())?.slotVersion).toBe('a'.repeat(32));
   }, 60_000);
 });

@@ -337,7 +337,7 @@ async function main() {
     });
     if (escrowedHashes.length) {
       const slot = { kind: 'draft', slotVersion: 1, evidence, escrowedHashes, savedAt: payload.savedAt };
-      await call(u.token, 'PUT', `/api/vault/slots/${await slotName(u.masterKey, 'draft')}`, { ...(await sealSlot(slot, u.masterKey)), expectedSeq: 0 });
+      await call(u.token, 'PUT', `/api/vault/slots/${await slotName(u.masterKey, 'draft')}`, { ...(await sealSlot(slot, u.masterKey)), expectedVersion: null });
     }
     return { id: res.record.id, createdAt: res.record.createdAt, key };
   }

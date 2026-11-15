@@ -148,13 +148,17 @@ export const slotEnvelope = envelope.extend({
   }, 'slot ciphertext must be whole 16 KiB buckets'),
 });
 
+/** A slot's version tag: 32 hex, random, new on every write. */
+export const slotVersion = z.string().regex(/^[0-9a-f]{32}$/, 'invalid slot version');
+
 export const putSlotRequest = z.object({
   envelope: slotEnvelope,
   wrappedKey: ownerWrappedKey,
-  expectedSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  /** the version she read; null when she has no slot by that name yet */
+  expectedVersion: slotVersion.nullable(),
 });
 
-export const deleteSlotRequest = z.object({ expectedSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional() });
+export const deleteSlotRequest = z.object({ expectedVersion: slotVersion.nullable().optional() });
 
 export const createShareRequest = z.object({
   recordId: id,

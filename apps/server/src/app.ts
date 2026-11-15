@@ -69,7 +69,7 @@ import type {
   WrappedKey,
 } from '@matra/shared';
 import { SLOT_MAX_PER_ACCOUNT, type DraftMode, type GetSlotResponse, type PutSlotResponse } from '@matra/shared';
-import { openDb, type DB } from './db.js';
+import { deploymentId, openDb, type DB } from './db.js';
 import { SlotStore, draftsDbPathFor } from './slots.js';
 import {
   appendLedger,
@@ -218,7 +218,7 @@ export class HttpError extends Error {
   }
 }
 
-/** A draft-slot write or delete named a seq that is no longer current (another device or tab saved since). */
+/** A draft-slot write or delete named a version that is no longer current (another device or tab saved since). */
 const slotConflict = () => new HttpError(409, 'slot_conflict', 'A newer draft was saved from another device or tab.');
 const tooManySlots = () => new HttpError(409, 'too_many_slots', 'This space already holds as many drafts as it can.');
 
@@ -518,9 +518,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
   const slots = new SlotStore(opts.draftsDbPath ?? draftsDbPathFor(opts.dbPath), SLOT_MAX_PER_ACCOUNT);
   const draftMode: DraftMode = opts.draftMode ?? 'slot';
-  // An account deletion that stopped between the two files leaves slots without an account: remove them now.
+  // The drafts file must belong to this main database (the same random deployment id in both, src/slots.ts). If it
+  // doesn't (a mistyped MATRA_DB_PATH, a restore of one file, a fresh main database), nothing is swept, and production
+  // refuses to start rather than serve or touch someone else's drafts.
   const userExists = db.prepare('SELECT 1 FROM users WHERE id = ?');
-  slots.sweepOrphans((id) => !!userExists.get(id));
+  const shredded = db.prepare(`SELECT 1 FROM ledger WHERE type = 'account.shredded' AND subject_id = ?`);
+  const accountExists = (id: string) => !!userExists.get(id);
+  const binding = slots.bind(deploymentId(db), accountExists);
+  if (binding === 'mismatch') {
+    const msg = `the draft-slot file (${opts.draftsDbPath ?? draftsDbPathFor(opts.dbPath)}) belongs to a different main database than ${opts.dbPath}. Check MATRA_DB_PATH and MATRA_DRAFTS_DB_PATH.`;
+    if (process.env.NODE_ENV === 'production') throw new Error(`Refusing to start: ${msg}`);
+    console.warn(`[matra] WARNING: ${msg} Its slots are left alone (not swept).`);
+  } else {
+    // Slots of accounts that were provably deleted (no user row AND an account.shredded ledger entry): an account
+    // deletion that stopped between the two files. Slots whose owner is merely missing are kept and reported.
+    const swept = slots.sweepDeleted(accountExists, (id) => !!shredded.get(id));
+    if (swept.deleted) console.log(`[matra] drafts: deleted the slots of ${swept.deleted} deleted account(s) left by an interrupted account deletion.`);
+    if (swept.unexplained) console.warn(`[matra] drafts: ${swept.unexplained} account(s) with slots are not in the main database and have no deletion record; their slots are kept.`);
+  }
   /** Sealed matching's settings when it is on; undefined when off (src/matching-off.ts). */
   const mopts = opts.matching || undefined;
   if (!mopts) checkLeftoverMatchingRows(db, process.env.NODE_ENV === 'production');
@@ -1010,7 +1025,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const row = slots.get(req.user!.id, name);
     const body: GetSlotResponse = {
       slot: row
-        ? { name: row.name, envelope: JSON.parse(row.envelope), wrappedKey: JSON.parse(row.wrapped_key), seq: row.seq, updatedDay: row.updated_day }
+        ? { name: row.name, envelope: JSON.parse(row.envelope), wrappedKey: JSON.parse(row.wrapped_key), version: row.version, updatedDay: row.updated_day }
         : null,
       draftMode,
     };
@@ -1023,9 +1038,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const body = parse(S.putSlotRequest, req.body);
     const envelopeJson = canonicalEnvelope(body.envelope);
     const wrappedJson = JSON.stringify(body.wrappedKey);
-    const current = slots.seqOf(me.id, name);
-    if (current !== body.expectedSeq) throw slotConflict();
-    if (current === 0 && !slots.hasRoom(me.id)) throw tooManySlots();
+    const current = slots.versionOf(me.id, name);
+    if (current !== body.expectedVersion) throw slotConflict();
+    if (current === null && !slots.hasRoom(me.id)) throw tooManySlots();
     if (draftMode === 'keep-versions') {
       // Keep this version as well: a record with a ledger entry, written before the slot so a failure keeps neither.
       const id = newId();
@@ -1038,17 +1053,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
         audit(me.id, 'record.created', `Encrypted record saved (ledger #${ledgerEntry.seq})`);
       })();
     }
-    const result = slots.put(me.id, name, envelopeJson, wrappedJson, body.expectedSeq);
+    const result = slots.put(me.id, name, envelopeJson, wrappedJson, body.expectedVersion);
     if (!result.ok && result.reason === 'conflict') throw slotConflict();
     if (!result.ok) throw tooManySlots();
-    const out: PutSlotResponse = { seq: result.seq, updatedDay: result.updatedDay, draftMode };
+    const out: PutSlotResponse = { version: result.version, updatedDay: result.updatedDay, draftMode };
     res.json(out);
   });
 
   app.delete('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
     const name = parse(S.slotName, req.params.name);
     const body = parse(S.deleteSlotRequest, req.body ?? {});
-    const r = slots.delete(req.user!.id, name, body.expectedSeq);
+    const r = slots.delete(req.user!.id, name, body.expectedVersion);
     if (!r.ok) throw slotConflict();
     res.json({ ok: true });
   });
@@ -2474,7 +2489,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
     // Move the deleted pages out of the WAL file now rather than at some later automatic checkpoint (same as phone tokens).
     checkpoint();
     // Her draft slots live in their own file: delete them too (and empty that WAL). A crash between the two leaves
-    // slots without an account, which the next start removes (slots.sweepOrphans).
+    // slots without an account; the next start removes them, because this deletion's account.shredded ledger entry proves
+    // the account is gone (slots.sweepDeleted).
     slots.deleteOwner(me.id);
     void syncMatcher(); // her entries leave the matcher; a counselor's departure changes its roster
     res.json({ ok: true });

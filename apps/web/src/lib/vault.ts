@@ -328,7 +328,7 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
 
 /**
  * The story's working copy, plus any files the in-memory working data has that it doesn't (details saved by the
- * Evidence page after the story opened). Her draft stays the story's own; the slot seq follows the newer save.
+ * Evidence page after the story opened). Her draft stays the story's own; the slot version follows the newer save.
  * Returns null when there is nothing new.
  */
 export function foldInLateEvidence(story: WorkingData, mem: WorkingData | null): WorkingData | null {
@@ -338,7 +338,7 @@ export function foldInLateEvidence(story: WorkingData, mem: WorkingData | null):
   return {
     ...story,
     evidence: mergeEvidence(story.evidence, mem.evidence),
-    slotSeq: mem.slotSeq ?? story.slotSeq,
+    slotVersion: mem.slotVersion !== undefined ? mem.slotVersion : story.slotVersion,
   };
 }
 

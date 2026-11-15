@@ -412,7 +412,21 @@ const MIGRATIONS: string[] = [
   ALTER TABLE users ADD COLUMN recovery_auth_salt BLOB;
   ALTER TABLE users ADD COLUMN recovery_wrapped_key TEXT;           -- Envelope JSON: AES-GCM(KEK_rec, account secret)
   `,
+  // ── v12: a random id for this database, written once. The draft-slot file (src/slots.ts) stores the same id, so a
+  // drafts file is never matched against (and swept by) a different or brand-new main database.
+  `
+  CREATE TABLE deployment_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  INSERT INTO deployment_meta (key, value) VALUES ('db_id', lower(hex(randomblob(16))));
+  `,
 ];
+
+/** This database's random id (migration v12). */
+export function deploymentId(db: DB): string {
+  return (db.prepare(`SELECT value FROM deployment_meta WHERE key = 'db_id'`).get() as { value: string }).value;
+}
 
 /**
  * A standalone OPRF key holder's own database (src/holder.ts): its quota counters, keyed by the app server's

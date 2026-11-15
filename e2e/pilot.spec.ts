@@ -150,6 +150,91 @@ test('pilot 2b. she signs in again and adds to her sealed version: it opens wher
   await signOut(page);
 });
 
+test('pilot 2c. a seal never loses her words: no draft save, no seal; a seal whose follow-up save fails keeps trying', async ({ page, consoleProblems }) => {
+  const alias = `wren-seal-${RUN}`;
+  // The aborted slot writes below are deliberate: the browser reports each one; those reports (only) are expected.
+  const dropExpectedAborts = () => {
+    const kept = consoleProblems.filter((p) => !/Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(p));
+    expect(consoleProblems.length - kept.length).toBeGreaterThan(0);
+    consoleProblems.splice(0, consoleProblems.length, ...kept);
+  };
+  const journal = page.locator('.space-journal .space-entry-text');
+  await registerSurvivor(page, alias);
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  await storySafety(page, 'Yes');
+  await addToStory(page, 'FIRST part, autosaved.');
+  await expect(page.getByTestId('vault-status')).toContainText('Saved to your private space', { timeout: 30_000 });
+  await addToStory(page, 'SECOND part, written in the last minute before sealing.');
+
+  // 1. Her draft can't be saved (every slot write fails): nothing is sealed, and she is told.
+  const posts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/vault/records') posts.push(r.url());
+  });
+  await page.route(/\/api\/vault\/slots\//, (route) => (route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()));
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await page.getByRole('button', { name: 'Seal my account' }).click();
+  await expect(page.getByRole('alert')).toContainText(/couldn’t save your draft just now, so nothing was sealed/, { timeout: 30_000 });
+  expect(posts).toHaveLength(0);
+  await page.unroute(/\/api\/vault\/slots\//);
+  dropExpectedAborts();
+
+  // 2. Sealed, but the save after it (marking the draft with the seal) fails: her page keeps the draft and says so.
+  await page.route(/\/api\/vault\/slots\//, (route) =>
+    route.request().method() === 'PUT' && posts.length > 0 ? route.abort('internetdisconnected') : route.continue(),
+  );
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('heading', { name: 'Your account is sealed', exact: true })).toBeVisible({ timeout: 60_000 });
+  expect(posts).toHaveLength(1);
+  const pending = page.getByTestId('seal-mark-pending');
+  await expect(pending).toBeVisible();
+  await page.unroute(/\/api\/vault\/slots\//);
+  dropExpectedAborts();
+  await pending.getByRole('button', { name: /Save now|Try again/ }).click();
+  await expect(pending).toHaveCount(0, { timeout: 30_000 });
+  await signOut(page);
+
+  // 3. After signing in again: nothing missing, and Home doesn't claim a newer draft.
+  await signIn(page, alias, SURVIVOR_PASS);
+  await expect(page.getByTestId('tile-story')).toContainText('Sealed and safe', { timeout: 60_000 });
+  await expect(page.getByTestId('tile-story')).not.toContainText('newer draft');
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  await expect(journal).toHaveText(['FIRST part, autosaved.', 'SECOND part, written in the last minute before sealing.']);
+  await addToStory(page, 'THIRD part, added later.');
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  const review = page.getByRole('region', { name: 'Here is everything you shared' });
+  await expect(review.locator('.space-review-entry .space-verbatim')).toHaveText([
+    'FIRST part, autosaved.',
+    'SECOND part, written in the last minute before sealing.',
+    'THIRD part, added later.',
+  ]);
+  await signOut(page);
+});
+
+test('pilot 2d. words she typed but did not add are still there after she seals and signs in again', async ({ page }) => {
+  const alias = `wren-unsent-${RUN}`;
+  await registerSurvivor(page, alias);
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  await storySafety(page, 'Yes');
+  await addToStory(page, 'An added part.');
+  await expect(page.getByTestId('vault-status')).toContainText('Saved to your private space', { timeout: 30_000 });
+  const box = page.getByLabel('What you would like to share');
+  if (!(await box.count())) await page.getByRole('button', { name: /Add more/ }).click();
+  await page.getByLabel('What you would like to share').fill('UNSENT words she typed but did not add.');
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await sealFromReview(page);
+  await signOut(page);
+  await signIn(page, alias, SURVIVOR_PASS);
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  if (!(await page.getByLabel('What you would like to share').count())) await page.getByRole('button', { name: /Add more/ }).click();
+  await expect(page.getByLabel('What you would like to share')).toHaveValue('UNSENT words she typed but did not add.');
+  await signOut(page);
+});
+
 test('pilot 3. the attorney opens and verifies what she shared', async ({ page }) => {
   const api = recordApi(page);
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');

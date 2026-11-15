@@ -175,8 +175,8 @@ export class ApiClient {
   putSlot(name: string, req: PutSlotRequest) {
     return this.json<PutSlotResponse>('PUT', `/api/vault/slots/${encodeURIComponent(name)}`, req);
   }
-  deleteSlot(name: string, expectedSeq?: number) {
-    return this.json<{ ok: true }>('DELETE', `/api/vault/slots/${encodeURIComponent(name)}`, expectedSeq === undefined ? {} : { expectedSeq });
+  deleteSlot(name: string, expectedVersion?: string | null) {
+    return this.json<{ ok: true }>('DELETE', `/api/vault/slots/${encodeURIComponent(name)}`, expectedVersion === undefined ? {} : { expectedVersion });
   }
   async uploadBlob(ciphertext: Uint8Array, ownerWrappedKey: WrappedKey): Promise<CreateBlobResponse> {
     const res = await this.raw('POST', '/api/vault/blobs', {

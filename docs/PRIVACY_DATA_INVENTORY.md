@@ -85,6 +85,11 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 |---|---|---|
 | seq, id, type, subject_id, content_hash, timestamp, prev_hash, entry_hash | tamper-evident history: ids, hashes, times only. No content, no IP, no identifier tag | **forever** (survives account deletion; hashes only) |
 
+### deployment_meta
+| Column | What / why | Retention |
+|---|---|---|
+| key, value | `db_id`: a random id for this database, written once; the draft-slot file stores the same id (§1a) | deployment |
+
 ### audit_events
 | Column | What / why | Retention |
 |---|---|---|
@@ -115,19 +120,26 @@ start over a database that still has sealed-match entries or report releases.
 
 ## 1a. Draft slots (SQLite, `<main db name>-drafts.db` beside it, or `MATRA_DRAFTS_DB_PATH`)
 
-Her draft, saved over as she writes (docs/SECURITY_WHITEPAPER.md §4b). No ledger entry and no `audit_events` row for a
-slot write. Every write ends with a TRUNCATE checkpoint, and `secure_delete` is on, so the file and its WAL hold only
-the newest copy once a write returns (a backup or snapshot taken earlier, or freed filesystem blocks, can still hold
-an older one).
+Her draft, saved over as she writes (docs/SECURITY_WHITEPAPER.md §4b). With `MATRA_DRAFT_MODE=slot` (default) a slot
+write adds no ledger entry and no `audit_events` row; with `keep-versions` each write also adds a record, a
+`record.sealed` ledger entry and a `record.created` activity row (§1 records). Every write ends with a TRUNCATE
+checkpoint, and `secure_delete` is on, so the file and its WAL hold only the newest copy once a write returns, unless
+another reader blocks the checkpoint (logged; cleared by the next write). A backup or snapshot taken earlier, or freed
+filesystem blocks, can still hold an older one. The file's modification time shows when any account last wrote.
 
 ### slots (WITHOUT ROWID)
 | Column | What / why | Retention |
 |---|---|---|
-| owner_id | which account | account (deleted with it; slots of an account that no longer exists are deleted at startup) |
-| name | 64 hex: HMAC under a key only her device derives, so the server can't tell which slot is her draft | account |
+| owner_id | which account | account (deleted with it; if a deletion stops between the two files, deleted at the next start for accounts with an `account.shredded` ledger entry) |
+| name | 64 hex: HMAC under a key only her device derives, so the name doesn't say which slot it is (how many slots she has and how often each is written can) | account |
 | envelope, wrapped_key | ciphertext of her draft (padded to whole 16 KiB) and its key wrapped under her master key | until her next save replaces it, or the account is deleted |
-| seq | how many times the slot was written (compare-and-swap, so two devices don't overwrite each other) | account |
+| version | random 128-bit tag, new on every write (compare-and-swap, so two devices don't overwrite each other); not a count | until her next save |
 | updated_day | UTC day of the last write; no finer time, no creation time | account |
+
+### slots_meta
+| Column | What / why | Retention |
+|---|---|---|
+| key, value | `main_db_id`: the random id of the main database this file belongs to (also in its `deployment_meta`), so a drafts file is never used or swept with another database | deployment |
 
 ## 2. App server memory (never written)
 

@@ -81,7 +81,7 @@ export function Evidence() {
       resumeDraft: resume.draft,
       resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.evidence),
       escrowedHashes: resume.escrowedHashes,
-      slotSeq: slot.seq,
+      slotVersion: slot.version,
       inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
       /** saved versions (or her draft slot) that couldn't be opened: resumeDraft may be older than her newest draft */
       unreadable: vault.unreadable + (slot.unreadable ? 1 : 0),
@@ -124,7 +124,7 @@ export function Evidence() {
         await setWorkingData({
           draft: mem?.draft ?? null,
           evidence: mergeEvidence(mem?.evidence, added),
-          ...(mem?.slotSeq !== undefined && { slotSeq: mem.slotSeq }),
+          ...(mem?.slotVersion !== undefined && { slotVersion: mem.slotVersion }),
         });
         throw new UnreadableVaultError(ex.unreadable);
       }
@@ -135,14 +135,14 @@ export function Evidence() {
           api,
           session.masterKey,
           { draft, evidence, ...(ex.escrowedHashes.length > 0 && { escrowedHashes: ex.escrowedHashes }) },
-          mem?.draft ? (mem.slotSeq ?? ex.slotSeq) : ex.slotSeq,
+          mem?.draft && mem.slotVersion !== undefined ? mem.slotVersion : ex.slotVersion,
         );
-        await setWorkingData({ draft, evidence, slotSeq: res.seq });
+        await setWorkingData({ draft, evidence, slotVersion: res.version });
       } catch (e) {
         // Her draft was saved from another device or tab since: keep the files' details in memory (My story folds them
         // in and asks her which draft to keep) rather than saving this draft over that one.
         if (e instanceof SlotConflictError)
-          await setWorkingData({ draft: mem?.draft ?? null, evidence: mergeEvidence(mem?.evidence, added), ...(mem?.slotSeq !== undefined && { slotSeq: mem.slotSeq }) });
+          await setWorkingData({ draft: mem?.draft ?? null, evidence: mergeEvidence(mem?.evidence, added), ...(mem?.slotVersion !== undefined && { slotVersion: mem.slotVersion }) });
         throw e;
       }
       setPersistMsg('Saved to your space and added to your draft story.');

@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import type { AttorneyProfile, AuditEvent, EscrowEntry, Share, SurvivorReportRequest } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { finals, latestOf, legacyDraftEvidence, loadVault, mergeEvidence, resumeFrom, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { finals, isCleanFinal, latestOf, legacyDraftEvidence, loadVault, mergeEvidence, resumeFrom, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
 import { loadDraftSlot } from '../lib/draftSlot';
 import { matchingApi } from '../api/matching';
 import { escrowLabel, hasUnsealedMatches } from '../lib/matching';
@@ -474,7 +474,13 @@ export function Dashboard() {
         {shares.data && shares.data.length > 0 && (
           <ul className="list">
             {shares.data.map(({ share, attorney }) => (
-              <ShareRow key={share.id} share={share} attorney={attorney} onChanged={() => { void shares.reload(); void audit.reload(); }} />
+              <ShareRow
+                key={share.id}
+                share={share}
+                attorney={attorney}
+                renewable={renewableShare(records, share.recordId)}
+                onChanged={() => { void shares.reload(); void audit.reload(); }}
+              />
             ))}
           </ul>
         )}
@@ -629,7 +635,17 @@ function EscrowCard({ entry, label }: { entry: EscrowEntry; label: string }) {
   );
 }
 
-function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: AttorneyProfile; onChanged(): void }) {
+/**
+ * A share may be renewed only if the sealed version it shared holds nothing but her account. One sealed before draft
+ * slots also holds her working notes, and renewing would extend the attorney's access to them; until her vault has
+ * opened and shows which it is, Renew stays hidden.
+ */
+function renewableShare(records: OpenedRecord[], recordId: string): 'yes' | 'legacy' | 'unknown' {
+  const r = records.find((x) => x.meta.id === recordId);
+  return !r ? 'unknown' : isCleanFinal(r.payload) ? 'yes' : 'legacy';
+}
+
+function ShareRow({ share, attorney, renewable, onChanged }: { share: Share; attorney?: AttorneyProfile; renewable: 'yes' | 'legacy' | 'unknown'; onChanged(): void }) {
   const { api } = useRequiredSession();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -703,9 +719,17 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
           </div>
         ) : (
           <div className="row">
-            <button className="btn btn-small" onClick={renew} disabled={busy}>
-              {busy ? 'Renewing…' : `Renew for ${shareLengthLabel(days)}`}
-            </button>
+            {renewable === 'yes' && (
+              <button className="btn btn-small" onClick={renew} disabled={busy}>
+                {busy ? 'Renewing…' : `Renew for ${shareLengthLabel(days)}`}
+              </button>
+            )}
+            {renewable === 'legacy' && (
+              <p className="small muted" style={{ margin: 0 }} data-testid="share-legacy">
+                This share is of a version saved in an older format that also keeps your working notes, so it can’t be
+                renewed. You can revoke it, and share your newest sealed version instead.
+              </p>
+            )}
             <button className="btn btn-small btn-danger" onClick={() => setConfirming(true)} data-testid="share-revoke">
               Revoke
             </button>

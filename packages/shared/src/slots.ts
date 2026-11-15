@@ -38,8 +38,8 @@ export interface VaultSlot {
   envelope: Envelope;
   /** the slot's content key, wrapped under her master key */
   wrappedKey: WrappedKey;
-  /** bumps by one on every write; a write must name the seq it read (compare-and-swap) */
-  seq: number;
+  /** random tag (32 hex), new on every write; a write must name the version it read (compare-and-swap) */
+  version: string;
   /** UTC day of the last write (YYYY-MM-DD); no finer time is stored */
   updatedDay: string;
 }
@@ -50,15 +50,15 @@ export interface GetSlotResponse {
   draftMode: DraftMode;
 }
 
-/** PUT /api/vault/slots/:name. `expectedSeq` is the seq she read (0 = no slot yet). Stale → 409 `slot_conflict`. */
+/** PUT /api/vault/slots/:name. `expectedVersion` is the version she read (null = no slot yet). Stale → 409 `slot_conflict`. */
 export interface PutSlotRequest {
   envelope: Envelope;
   wrappedKey: WrappedKey;
-  expectedSeq: number;
+  expectedVersion: string | null;
 }
 
 export interface PutSlotResponse {
-  seq: number;
+  version: string;
   updatedDay: string;
   draftMode: DraftMode;
 }
