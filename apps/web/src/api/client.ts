@@ -37,6 +37,7 @@ import type {
   DeleteAccountRequest,
   Share,
   ShareBundle,
+  RenewShareRequest,
   VaultRecord,
   VaultRecordMeta,
   WrappedKey,
@@ -225,8 +226,9 @@ export class ApiClient {
   getShareBundle(id: string) {
     return this.json<ShareBundle>('GET', `/api/shares/${encodeURIComponent(id)}/bundle`);
   }
-  renewShare(id: string, expiresInDays?: number) {
-    return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', `/api/shares/${encodeURIComponent(id)}/renew`, { expiresInDays });
+  /** With a fresh wrap (`recipientWrappedKey`, `blobs`) only when the share's keys were deleted (`share.keyDeleted`). */
+  renewShare(id: string, req: RenewShareRequest = {}) {
+    return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', `/api/shares/${encodeURIComponent(id)}/renew`, req);
   }
   revokeShare(id: string) {
     return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', `/api/shares/${encodeURIComponent(id)}/revoke`);

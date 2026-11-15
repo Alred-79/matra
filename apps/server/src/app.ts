@@ -101,6 +101,7 @@ import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHold
 import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
 import { INSPECTOR_ROUTE, RequestRecorder, appProcess, fetchProcess, findInDb } from './inspector.js';
 import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, assertWebBuildMatches, checkLeftoverMatchingRows, matchingDisabled } from './matching-off.js';
+import { checkpoint as checkpointWal, forgetReleaseKeys, forgetShareKeys, sweepRecipientKeys } from './recipient-keys.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
@@ -299,7 +300,8 @@ interface ShareRow {
   status: 'active' | 'revoked';
   consent_statement: string;
   scope: string;
-  recipient_wrapped_key: string;
+  /** NULL once access ended (src/recipient-keys.ts) */
+  recipient_wrapped_key: string | null;
   survivor_alias: string;
   created_at: string;
   revoked_at: string | null;
@@ -307,6 +309,8 @@ interface ShareRow {
   ledger_entry_id: string;
   /** only on her own share list: whether the attorney is verified right now (attorney_profiles.verified) */
   attorney_verified?: number | null;
+  /** only on her own share list: JSON array of the files the share covers */
+  blob_ids?: string | null;
 }
 interface MatchEntryRow {
   id: string;
@@ -347,7 +351,8 @@ interface ReportReleaseRow {
   survivor_id: string;
   counselor_id: string;
   record_id: string;
-  recipient_wrapped_key: string;
+  /** NULL once access ended (src/recipient-keys.ts) */
+  recipient_wrapped_key: string | null;
   consent_statement: string;
   status: 'active' | 'revoked';
   created_at: string;
@@ -426,6 +431,8 @@ const toShare = (s: ShareRow): Share => ({
   ...(s.revoked_at != null && { revokedAt: s.revoked_at }),
   ledgerEntryId: s.ledger_entry_id,
   ...(s.attorney_verified != null && { attorneyVerified: s.attorney_verified === 1 }),
+  ...(s.recipient_wrapped_key == null && { keyDeleted: true }),
+  ...(s.blob_ids != null && { blobIds: JSON.parse(s.blob_ids) as string[] }),
 });
 
 const DEFAULT_SHARE_DAYS = 90;
@@ -1277,7 +1284,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     // Her own list also says whether each attorney is verified right now: an unverified attorney's access is paused.
     const rows = db
       .prepare(
-        `SELECT s.*, p.verified AS attorney_verified FROM shares s LEFT JOIN attorney_profiles p ON p.user_id = s.attorney_id
+        `SELECT s.*, p.verified AS attorney_verified,
+                (SELECT json_group_array(sb.blob_id) FROM share_blobs sb WHERE sb.share_id = s.id) AS blob_ids
+           FROM shares s LEFT JOIN attorney_profiles p ON p.user_id = s.attorney_id
           WHERE s.survivor_id = ? ORDER BY s.created_at DESC, s.rowid DESC`,
       )
       .all(me.id) as ShareRow[];
@@ -1290,13 +1299,15 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
     if (s.attorney_id !== me.id) throw new HttpError(403, 'forbidden', 'This share was not granted to you.');
     if (s.status !== 'active') throw new HttpError(403, 'share_revoked', 'The survivor has revoked access to this file.');
-    if (!isShareLive(s)) throw new HttpError(403, 'share_expired', 'This share has expired. Ask the survivor to renew it.');
+    // (an active share has no wrap only once it expired 30+ days ago and she hasn't renewed it yet)
+    if (!isShareLive(s) || s.recipient_wrapped_key == null)
+      throw new HttpError(403, 'share_expired', 'This share has expired. Ask the survivor to renew it.');
     const r = q.recordById.get(s.record_id) as RecordRow;
     const blobs = db
       .prepare(
         `SELECT sb.blob_id, sb.recipient_wrapped_key, b.content_hash, b.size_bytes
            FROM share_blobs sb JOIN blobs b ON b.id = sb.blob_id
-          WHERE sb.share_id = ? ORDER BY sb.rowid ASC`,
+          WHERE sb.share_id = ? AND sb.recipient_wrapped_key IS NOT NULL ORDER BY sb.rowid ASC`,
       )
       .all(s.id) as Array<{ blob_id: string; recipient_wrapped_key: string; content_hash: string; size_bytes: number }>;
     const bundle: ShareBundle = {
@@ -1331,12 +1342,38 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
     if (s.survivor_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only renew your own shares.');
     if (s.status === 'revoked') throw new HttpError(409, 'already_revoked', 'A revoked share cannot be renewed. Create a new share.');
-    const { expiresInDays } = parse(S.renewShareRequest, req.body ?? {});
-    const expiresAt = addDays(Date.now(), expiresInDays ?? DEFAULT_SHARE_DAYS);
+    const body = parse(S.renewShareRequest, req.body ?? {});
+    // Access ended more than WRAP_GRACE_DAYS ago, so the attorney's copies of the keys were deleted (src/recipient-keys.ts):
+    // renewing needs fresh ones from her device, for the same record and files, to the key she confirmed when she shared.
+    const keyDeleted = s.recipient_wrapped_key == null;
+    const coveredBlobs = (db.prepare('SELECT blob_id FROM share_blobs WHERE share_id = ?').all(s.id) as Array<{ blob_id: string }>).map((b) => b.blob_id);
+    if (keyDeleted) {
+      if (!body.recipientWrappedKey)
+        throw new HttpError(409, 'rewrap_required', 'This share ended long enough ago that its keys were deleted. Lock it for the attorney again to renew.');
+      const attorney = q.userById.get(s.attorney_id) as UserRow | undefined;
+      if (!attorney || !s.consent_statement.includes(keyFingerprint(attorney.public_key)))
+        throw new HttpError(409, 'attorney_key_mismatch', "The attorney's key is not the one you confirmed when you shared. Nothing was renewed.");
+      const sent = (body.blobs ?? []).map((b) => b.blobId);
+      if (sent.length !== coveredBlobs.length || !coveredBlobs.every((id) => sent.includes(id)))
+        throw new HttpError(400, 'rewrap_mismatch', 'The renewed share must cover exactly the files it covered before.');
+    } else if (body.recipientWrappedKey || body.blobs) {
+      throw new HttpError(409, 'rewrap_not_needed', 'This share still has its keys; renew it without new ones.');
+    }
+    const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
     let ledgerEntry!: LedgerEntry;
     db.transaction(() => {
-      ledgerEntry = appendLedger(db, 'share.renewed', s.id, sha256Hex(JSON.stringify({ shareId: s.id, expiresAt })));
+      ledgerEntry = appendLedger(
+        db,
+        'share.renewed',
+        s.id,
+        sha256Hex(JSON.stringify({ shareId: s.id, expiresAt, ...(keyDeleted && { rewrapped: true }) })),
+      );
       db.prepare('UPDATE shares SET expires_at = ? WHERE id = ?').run(expiresAt, s.id);
+      if (keyDeleted) {
+        db.prepare('UPDATE shares SET recipient_wrapped_key = ? WHERE id = ?').run(JSON.stringify(body.recipientWrappedKey), s.id);
+        const put = db.prepare('UPDATE share_blobs SET recipient_wrapped_key = ? WHERE share_id = ? AND blob_id = ?');
+        for (const b of body.blobs ?? []) put.run(JSON.stringify(b.recipientWrappedKey), s.id, b.blobId);
+      }
       audit(me.id, 'share.renewed', `You renewed access for ${attorneyLabel(s.attorney_id)} until ${expiresAt.slice(0, 10)}`);
       audit(s.attorney_id, 'share.renewed_by_survivor', `A survivor ("${s.survivor_alias}") renewed your access to a case file`);
     })();
@@ -1360,9 +1397,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
         revokedAt,
       );
       db.prepare(`UPDATE shares SET status = 'revoked', revoked_at = ? WHERE id = ?`).run(revokedAt, s.id);
+      // the attorney's copies of the keys go with it (src/recipient-keys.ts)
+      forgetShareKeys(db, s.id);
       audit(me.id, 'share.revoked', `You revoked access for ${attorneyLabel(s.attorney_id)}`);
       audit(s.attorney_id, 'share.revoked_by_survivor', `A survivor ("${s.survivor_alias}") revoked your access to a case file`);
     })();
+    checkpointWal(db);
     res.json({ share: toShare(q.shareById.get(s.id) as ShareRow), ledgerEntry });
   });
 
@@ -1544,6 +1584,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const housekeeping = () => {
     try {
       purgeExpiredSessions(db);
+    } catch {
+      /* DB closed */
+    }
+    try {
+      // recipients' keys of shares and releases that ended (src/recipient-keys.ts), whether or not matching is on
+      sweepRecipientKeys(db);
+      // and out of the write-ahead log, also after a release Matra ended for her inside another request
+      checkpointWal(db);
     } catch {
       /* DB closed */
     }
@@ -1798,6 +1846,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const endRelease = (rel: LiveReleaseRef, reason: Exclude<ReportRevokeReason, 'survivor'>, revokedAt: string) => {
     appendLedger(db, 'report.revoked', rel.id, revokeHash(rel.id, reason, revokedAt), revokedAt);
     db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE id = ?`).run(revokedAt, reason, rel.id);
+    forgetReleaseKeys(db, rel.id);
     audit(rel.survivor_id, 'report.revoked', `Your report is no longer shared with ${counselorLabel(rel.counselor_id)}: ${ENDED_FOR_HER[reason]}`);
     audit(rel.counselor_id, 'counselor.release_revoked', 'Your access to a report a survivor shared with you has ended');
   };
@@ -2237,7 +2286,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const r = releaseById.get(parse(S.id, req.params.id)) as ReportReleaseRow | undefined;
     if (!r || r.counselor_id !== req.user!.id) throw new HttpError(404, 'release_not_found', 'Report not found.');
     if (r.status !== 'active') throw new HttpError(403, 'release_revoked', 'She has stopped sharing her report with you.');
-    if (!isReleaseLive(r)) throw new HttpError(403, 'release_expired', 'Access to this report has ended.');
+    if (!isReleaseLive(r) || r.recipient_wrapped_key == null) throw new HttpError(403, 'release_expired', 'Access to this report has ended.');
     const g = groupById.get(r.group_id) as GroupRow | undefined;
     const ids = rosterIds();
     if (!g || !assignmentFor.get(g.tag, r.counselor_id) || (ids && !ids.has(r.counselor_id)))
@@ -2257,7 +2306,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       .prepare(
         `SELECT rb.blob_id, rb.recipient_wrapped_key, b.content_hash, b.size_bytes
            FROM report_release_blobs rb JOIN blobs b ON b.id = rb.blob_id
-          WHERE rb.release_id = ? ORDER BY rb.rowid ASC`,
+          WHERE rb.release_id = ? AND rb.recipient_wrapped_key IS NOT NULL ORDER BY rb.rowid ASC`,
       )
       .all(r.id) as Array<{ blob_id: string; recipient_wrapped_key: string; content_hash: string; size_bytes: number }>;
     const when = new Date().toISOString();
@@ -2265,7 +2314,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const bundle: ReportReleaseBundle = {
       release: toRelease(releaseById.get(r.id) as ReportReleaseRow),
       record: { id: rec.id, envelope: JSON.parse(rec.envelope), contentHash: rec.content_hash, createdAt: rec.created_at, ledgerEntryId: rec.ledger_entry_id },
-      recipientWrappedKey: JSON.parse(r.recipient_wrapped_key),
+      recipientWrappedKey: JSON.parse(r.recipient_wrapped_key!), // liveReleaseFor refuses a release without one
       blobs: blobs.map((b) => ({ blobId: b.blob_id, recipientWrappedKey: JSON.parse(b.recipient_wrapped_key), contentHash: b.content_hash, sizeBytes: b.size_bytes })),
     };
     audit(me.id, 'counselor.opened_report', 'Opened a report a survivor shared with you');
@@ -2410,9 +2459,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
       const revokedAt = new Date().toISOString();
       ledgerEntry = appendLedger(db, 'report.revoked', r.id, revokeHash(r.id, 'survivor', revokedAt), revokedAt);
       db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = 'survivor' WHERE id = ?`).run(revokedAt, r.id);
+      forgetReleaseKeys(db, r.id); // the counselor's copies of the keys go with it (src/recipient-keys.ts)
       audit(me.id, 'report.revoked', `You stopped sharing your report with ${counselorLabel(r.counselor_id)}`);
       audit(r.counselor_id, 'counselor.release_revoked', 'A survivor stopped sharing her report with you');
     })();
+    checkpointWal(db);
     res.json({ release: toSurvivorRelease(releaseById.get(r.id) as ReportReleaseRow), ledgerEntry });
   });
 

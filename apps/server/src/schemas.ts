@@ -179,7 +179,16 @@ export const createShareRequest = z.object({
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
-export const renewShareRequest = z.object({ expiresInDays: z.number().int().min(1).max(365).optional() });
+/** A fresh wrap (record + each covered file) is sent only when the stored one was deleted (src/recipient-keys.ts). */
+export const renewShareRequest = z.object({
+  expiresInDays: z.number().int().min(1).max(365).optional(),
+  recipientWrappedKey: recipientWrappedKey.optional(),
+  blobs: z
+    .array(z.object({ blobId: id, recipientWrappedKey }))
+    .max(500)
+    .refine((b) => new Set(b.map((x) => x.blobId)).size === b.length, 'duplicate blobId')
+    .optional(),
+});
 
 /** Small envelopes (labels, contact bundles, seals, notes): ≤ 64 KB of ciphertext. */
 export const smallEnvelope = envelope.extend({ ct: base64(90_000).refine((s) => b64Len(s) >= 16, 'ct too short') });

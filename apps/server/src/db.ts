@@ -421,6 +421,87 @@ const MIGRATIONS: string[] = [
   );
   INSERT INTO deployment_meta (key, value) VALUES ('db_id', lower(hex(randomblob(16))));
   `,
+  // ── v13: a recipient's copy of a key is deleted when access ends (src/recipient-keys.ts). recipient_wrapped_key in
+  // shares, share_blobs, report_releases and report_release_blobs becomes nullable (SQLite can only drop NOT NULL by
+  // rebuilding the table): NULL once she revokes, once Matra ends a release, or 30 days after access expired. Rows that
+  // were already revoked lose theirs here. Everything else is copied unchanged.
+  `
+  CREATE TABLE shares_v13 (
+    id                    TEXT PRIMARY KEY,
+    record_id             TEXT NOT NULL REFERENCES records(id),
+    survivor_id           TEXT NOT NULL REFERENCES users(id),
+    attorney_id           TEXT NOT NULL REFERENCES users(id),
+    status                TEXT NOT NULL CHECK (status IN ('active','revoked')),
+    consent_statement     TEXT NOT NULL,
+    scope                 TEXT NOT NULL,        -- JSON array
+    recipient_wrapped_key TEXT,                 -- NULL once access ended (revoked, or expired 30+ days)
+    survivor_alias        TEXT NOT NULL,
+    created_at            TEXT NOT NULL,
+    revoked_at            TEXT,
+    ledger_entry_id       TEXT NOT NULL REFERENCES ledger(id),
+    expires_at            TEXT
+  );
+  INSERT INTO shares_v13 (id, record_id, survivor_id, attorney_id, status, consent_statement, scope, recipient_wrapped_key,
+                          survivor_alias, created_at, revoked_at, ledger_entry_id, expires_at)
+    SELECT id, record_id, survivor_id, attorney_id, status, consent_statement, scope, recipient_wrapped_key,
+           survivor_alias, created_at, revoked_at, ledger_entry_id, expires_at FROM shares;
+  DROP TABLE shares;
+  ALTER TABLE shares_v13 RENAME TO shares;
+  CREATE INDEX shares_survivor ON shares(survivor_id);
+  CREATE INDEX shares_attorney ON shares(attorney_id);
+
+  CREATE TABLE share_blobs_v13 (
+    share_id              TEXT NOT NULL REFERENCES shares(id),
+    blob_id               TEXT NOT NULL REFERENCES blobs(id),
+    recipient_wrapped_key TEXT,                 -- NULL with its share's
+    PRIMARY KEY (share_id, blob_id)
+  );
+  INSERT INTO share_blobs_v13 (share_id, blob_id, recipient_wrapped_key) SELECT share_id, blob_id, recipient_wrapped_key FROM share_blobs;
+  DROP TABLE share_blobs;
+  ALTER TABLE share_blobs_v13 RENAME TO share_blobs;
+  CREATE INDEX share_blobs_blob ON share_blobs(blob_id);
+
+  CREATE TABLE report_releases_v13 (
+    id                    TEXT PRIMARY KEY,
+    request_id            TEXT NOT NULL UNIQUE,
+    survivor_id           TEXT NOT NULL,
+    counselor_id          TEXT NOT NULL,
+    record_id             TEXT NOT NULL,
+    recipient_wrapped_key TEXT,                 -- NULL once access ended (revoked, or expired 30+ days)
+    consent_statement     TEXT NOT NULL,
+    status                TEXT NOT NULL CHECK (status IN ('active','revoked')),
+    created_at            TEXT NOT NULL,
+    expires_at            TEXT NOT NULL,
+    first_opened_at       TEXT,
+    revoked_at            TEXT,
+    ledger_entry_id       TEXT NOT NULL,
+    revoke_reason         TEXT CHECK (revoke_reason IN ('survivor','conflict','resealed','withdrawn'))
+  );
+  INSERT INTO report_releases_v13 (id, request_id, survivor_id, counselor_id, record_id, recipient_wrapped_key, consent_statement,
+                                   status, created_at, expires_at, first_opened_at, revoked_at, ledger_entry_id, revoke_reason)
+    SELECT id, request_id, survivor_id, counselor_id, record_id, recipient_wrapped_key, consent_statement,
+           status, created_at, expires_at, first_opened_at, revoked_at, ledger_entry_id, revoke_reason FROM report_releases;
+  DROP TABLE report_releases;
+  ALTER TABLE report_releases_v13 RENAME TO report_releases;
+  CREATE INDEX report_releases_survivor ON report_releases(survivor_id);
+  CREATE INDEX report_releases_counselor ON report_releases(counselor_id);
+
+  CREATE TABLE report_release_blobs_v13 (
+    release_id            TEXT NOT NULL,
+    blob_id               TEXT NOT NULL,
+    recipient_wrapped_key TEXT,                 -- NULL with its release's
+    PRIMARY KEY (release_id, blob_id)
+  );
+  INSERT INTO report_release_blobs_v13 (release_id, blob_id, recipient_wrapped_key)
+    SELECT release_id, blob_id, recipient_wrapped_key FROM report_release_blobs;
+  DROP TABLE report_release_blobs;
+  ALTER TABLE report_release_blobs_v13 RENAME TO report_release_blobs;
+
+  UPDATE share_blobs SET recipient_wrapped_key = NULL WHERE share_id IN (SELECT id FROM shares WHERE status = 'revoked');
+  UPDATE shares SET recipient_wrapped_key = NULL WHERE status = 'revoked';
+  UPDATE report_release_blobs SET recipient_wrapped_key = NULL WHERE release_id IN (SELECT id FROM report_releases WHERE status = 'revoked');
+  UPDATE report_releases SET recipient_wrapped_key = NULL WHERE status = 'revoked';
+  `,
 ];
 
 /** This database's random id (migration v12). */
@@ -461,7 +542,7 @@ export function openHolderDb(dbPath: string): DB {
 }
 
 /** Migrations (0-based index) that rebuild a referenced table and must run with foreign_keys OFF. */
-const FK_OFF = new Set([3]);
+const FK_OFF = new Set([3, 12]);
 
 export function openDb(dbPath: string): DB {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
@@ -492,4 +573,7 @@ function migrate(db: DB): void {
       if (fkOff) db.pragma('foreign_keys = ON');
     }
   }
+  // A migration can delete secrets (v13: revoked recipients' keys). secure_delete overwrites the freed pages in the main
+  // file; checkpointing now moves them out of the write-ahead log as well, rather than at some later write.
+  if (current < MIGRATIONS.length) db.pragma('wal_checkpoint(TRUNCATE)');
 }

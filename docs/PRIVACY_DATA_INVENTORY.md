@@ -75,7 +75,7 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 | Column | What / why | Retention |
 |---|---|---|
 | record_id, survivor_id, attorney_id, scope | what she shared with whom | account (either side) |
-| recipient_wrapped_key | content key wrapped to the attorney's public key | account |
+| recipient_wrapped_key | content key (and each shared file's) wrapped to the attorney's public key | until access ends: deleted (set to NULL) in the same transaction as her revoke, or by housekeeping 30 days after the share expired; a renewal after that stores a fresh one from her device (`src/recipient-keys.ts`). Backups made before keep it |
 | consent_statement | the consent text she agreed to (also hashed into the ledger) | account |
 | survivor_alias | the name she chose to show the attorney | account |
 | status, created_at, expires_at, revoked_at, ledger_entry_id | access control and her audit view | account |
@@ -112,7 +112,7 @@ start over a database that still has sealed-match entries or report releases.
 | matcher_pending_deletes | entry ids queued for deletion at the matcher | until the matcher confirms |
 | counselor_notes | counselor's notes, encrypted under her own key | group-level notes: until no entry with the group's tag remains (or the counselor's account is deleted); notes about one entry: with that entry |
 | conflict_checks | counselor's conflict-check result and time per group | until no entry with the group's tag remains (or the counselor's account is deleted) |
-| report_requests, report_releases, report_release_blobs | staged release: who asked whom, her yes/no, wrapped keys, consent text, times | with the entry / account |
+| report_requests, report_releases, report_release_blobs | staged release: who asked whom, her yes/no, wrapped keys, consent text, times | with the entry / account; the wrapped keys only until the release ends (deleted with her revoke or Matra's, or 30 days after it expired, also with `MATRA_MATCHING=off`) |
 | oprf_quota | per account and holder: today's count and lifetime count (no per-call times) | account |
 | phone_tokens | keyed hash of a verified number and a count; no account id, no rowid | **forever** (no row names an account, so none can be deleted with one) |
 | matching_meta | OPRF public keys, key epoch, signed counselor roster | deployment |

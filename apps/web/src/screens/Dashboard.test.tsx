@@ -1,6 +1,8 @@
 import { act, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { decryptJSON, publicKeyFingerprint, unwrapKeyWithPrivate } from '@matra/crypto';
 import type { AttorneyProfile, Share } from '@matra/shared';
 import { sampleRecord } from '../brief/fixtures';
 import { useSession } from '../lib/session';
@@ -28,6 +30,7 @@ async function homeWith(username: string, fail: Parameters<typeof vaultRoutes>[1
     if (hit) return hit;
     if (url.pathname === '/api/vault/blobs') return json(200, { blobs: [] });
     if (url.pathname === '/api/shares') return json(200, { shares });
+    if (url.pathname.endsWith('/renew')) return json(200, { share: shares[0], ledgerEntry: {} });
     if (url.pathname === '/api/attorneys') return json(200, { attorneys });
     if (url.pathname === '/api/audit') return json(200, { events: [] });
     return base.fetchImpl(input, init);
@@ -77,6 +80,43 @@ describe('Home: sharing', () => {
     const rows = screen.getAllByTestId('share-revoke').map((b) => b.closest('li')!);
     const cleanRow = rows.find((r) => r !== legacyRow)!;
     expect(within(cleanRow).getByRole('button', { name: /^Renew/ })).toBeInTheDocument();
+  }, 60_000);
+
+  it('renewing a share whose keys were deleted locks her file for the attorney again on her device, to the key she confirmed', async () => {
+    const user = userEvent.setup();
+    const h = await homeWith('wren-rewrap');
+    const r = await storedRecord(h.mk, { kind: 'final', record: sampleRecord, savedAt: '2026-08-20T00:00:00Z' }, { id: 'r-clean' });
+    h.stored.push(r);
+    // any valid RSA key will do for the attorney (this test build pins no org key): her own
+    const attorneyKey = current!.session!.user.publicKey;
+    const fp = await publicKeyFingerprint(attorneyKey);
+    h.attorneys.push({ userId: 'a-s1', displayName: 'Attorney Test', jurisdictions: ['NJ'], practiceAreas: [], verified: true, acceptsProBono: true, publicKey: attorneyKey });
+    h.shares.push(share('s1', 'r-clean', { expiresAt: '2026-01-01T00:00:00Z', keyDeleted: true, blobIds: [], consentStatement: `I consent. Key ${fp}.` }));
+    await h.reopen();
+
+    expect(await screen.findByTestId('share-key-deleted', {}, { timeout: 15_000 })).toHaveTextContent(/deleted the attorney’s copy of the key/);
+    await user.click(await screen.findByRole('button', { name: /^Renew/ }, { timeout: 15_000 }));
+    await vi.waitFor(() => expect(h.fetchImpl.mock.calls.some(([u]) => String(u).endsWith('/renew'))).toBe(true), { timeout: 15_000 });
+    const [, init] = h.fetchImpl.mock.calls.find(([u]) => String(u).endsWith('/renew'))!;
+    const body = JSON.parse(String(init!.body));
+    expect(body.blobs).toEqual([]);
+    // the attorney's private key (here: hers) opens the record key the server never saw unwrapped
+    const key = await unwrapKeyWithPrivate(body.recipientWrappedKey, current!.session!.privateKey);
+    expect(await decryptJSON(r.record.envelope, key)).toMatchObject({ kind: 'final', savedAt: '2026-08-20T00:00:00Z' });
+    expect(body.expiresInDays).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('does not re-wrap to a key she never confirmed', async () => {
+    const user = userEvent.setup();
+    const h = await homeWith('wren-swapped');
+    h.stored.push(await storedRecord(h.mk, { kind: 'final', record: sampleRecord, savedAt: '2026-08-20T00:00:00Z' }, { id: 'r-clean' }));
+    h.attorneys.push({ userId: 'a-s1', displayName: 'Attorney Test', jurisdictions: ['NJ'], practiceAreas: [], verified: true, acceptsProBono: true, publicKey: current!.session!.user.publicKey });
+    h.shares.push(share('s1', 'r-clean', { expiresAt: '2026-01-01T00:00:00Z', keyDeleted: true, blobIds: [], consentStatement: 'I consent. Key AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000-1111.' }));
+    await h.reopen();
+
+    await user.click(await screen.findByRole('button', { name: /^Renew/ }, { timeout: 15_000 }));
+    expect(await screen.findByText(/isn’t the one you confirmed when you shared, so nothing was renewed/, {}, { timeout: 15_000 })).toBeInTheDocument();
+    expect(h.fetchImpl.mock.calls.some(([u]) => String(u).endsWith('/renew'))).toBe(false);
   }, 60_000);
 });
 

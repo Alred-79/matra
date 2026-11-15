@@ -369,6 +369,13 @@ export interface Share {
    * attorney's access to this share (paused, not revoked); she decides whether to revoke or keep it.
    */
   attorneyVerified?: boolean;
+  /**
+   * The attorney's copies of the keys were deleted: at once when she revoked, or 30 days after access expired. Renewing
+   * then sends fresh ones from her device (RenewShareRequest).
+   */
+  keyDeleted?: boolean;
+  /** Her own list only: the files this share covers (a renewal after keyDeleted wraps exactly these again). */
+  blobIds?: string[];
 }
 
 export interface ShareBundle {
@@ -866,6 +873,16 @@ export interface CreateShareRequest {
   expiresInDays?: number;
 }
 
+/**
+ * POST /api/shares/:id/renew. `recipientWrappedKey` and `blobs` only when the share's keys were deleted (`keyDeleted`):
+ * the same record and exactly the files it covered, wrapped again to the key named in her consent statement.
+ */
+export interface RenewShareRequest {
+  expiresInDays?: number;
+  recipientWrappedKey?: WrappedKey;
+  blobs?: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+}
+
 export interface LedgerVerifyResponse { ok: boolean; length: number; headHash: string; brokenAtSeq?: number }
 
 /**
@@ -930,8 +947,12 @@ export interface ApiError { error: string; code?: string }
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
  GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares)
- POST   /api/shares/:id/renew  { expiresInDays? } -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked)
- POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only)
+ POST   /api/shares/:id/renew  RenewShareRequest     -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked;
+                                                         a fresh wrap only when share.keyDeleted: 409 rewrap_required
+                                                         without one, 409 rewrap_not_needed with one otherwise,
+                                                         409 attorney_key_mismatch, 400 rewrap_mismatch)
+ POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; deletes
+                                                         the attorney's copies of the keys in the same transaction)
 
  Sealed matching (only with MATRA_MATCHING=on; with it off, every route from here to /api/report-releases answers
  404 { code: 'matching_disabled' }, and POST /api/auth/register with role 'counselor' does too):
@@ -969,7 +990,8 @@ export interface ApiError { error: string; code?: string }
  GET    /api/report-requests                                 -> { requests: SurvivorReportRequest[] } (survivor: her own)
  POST   /api/report-requests/:id/consent ReportConsentRequest -> { release: ReportRelease, ledgerEntry: LedgerEntry }
  POST   /api/report-requests/:id/decline                     -> { request: SurvivorReportRequest }
- POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry }
+ POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry } (deletes the
+                                                               counselor's copies of the keys in the same transaction)
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete  DeleteAccountRequest     -> { ok: true }  (401 invalid_credentials on a wrong passphrase. Deletes her

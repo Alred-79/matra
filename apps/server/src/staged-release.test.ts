@@ -38,6 +38,11 @@ const requestsOf = async (app: express.Express, s: TestUser) => {
   expect(r.status).toBe(200);
   return r.body.requests as SurvivorReportRequest[];
 };
+/** The counselor's copies of the keys a release still holds: the record's, then each file's (null once deleted). */
+const wrapsOf = (app: express.Express, releaseId: string) => ({
+  record: (getDb(app).prepare('SELECT recipient_wrapped_key AS k FROM report_releases WHERE id = ?').get(releaseId) as { k: string | null }).k,
+  files: (getDb(app).prepare('SELECT recipient_wrapped_key AS k FROM report_release_blobs WHERE release_id = ?').all(releaseId) as Array<{ k: string | null }>).map((r) => r.k),
+});
 const ledgerTypes = (app: express.Express) =>
   (getDb(app).prepare('SELECT type FROM ledger ORDER BY seq').all() as Array<{ type: string }>).map((r) => r.type);
 
@@ -316,6 +321,8 @@ describe('revocation, withdrawal and deletion', () => {
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).body.code).toBe('release_revoked');
     expect((await request(app).get(`/api/counselor/releases/${release.id}/blobs/${'0'.repeat(32)}`).set(loc.auth)).body.code).toBe('release_revoked');
     expect(db.prepare('SELECT first_opened_at FROM report_releases WHERE id = ?').get(release.id)).toEqual({ first_opened_at: null });
+    // the counselor's copies of the keys were deleted with the revoke (src/recipient-keys.ts); the rows stay
+    expect(wrapsOf(app, release.id)).toEqual({ record: null, files: [null] });
   });
 
   it('revoked after she opened it: future access stops', async () => {
@@ -331,6 +338,19 @@ describe('revocation, withdrawal and deletion', () => {
     const { app, db, loc, release } = await released();
     db.prepare('UPDATE report_releases SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1000).toISOString(), release.id);
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).body.code).toBe('release_expired');
+  });
+
+  it('30 days after a release expired, the housekeeping sweep deletes the counselor’s copies of its keys', async () => {
+    const { app, db, release } = await released();
+    const day = 86_400_000;
+    db.prepare('UPDATE report_releases SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 29 * day).toISOString(), release.id);
+    app.locals.housekeeping();
+    expect(wrapsOf(app, release.id).record).not.toBeNull();
+    db.prepare('UPDATE report_releases SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 31 * day).toISOString(), release.id);
+    app.locals.housekeeping();
+    expect(wrapsOf(app, release.id)).toEqual({ record: null, files: [null] });
+    // the release itself (status, dates, consent text) stays for her record
+    expect(db.prepare('SELECT status, consent_statement FROM report_releases WHERE id = ?').get(release.id)).toMatchObject({ status: 'active' });
   });
 
   it('withdrawing her entry deletes its requests and releases; the counselor sees them vanish', async () => {
@@ -454,6 +474,8 @@ describe('a release outlives a re-seal, ends when the counselor can no longer ho
     expect(ledgerTypes(app).slice(before)).toEqual(['counselor.conflict_checked', 'report.revoked']);
     expect((await bundleOf(app, loc, release.id)).body.code).toBe('release_revoked');
     expect((await request(app).get(`/api/counselor/releases/${release.id}/blobs/${'0'.repeat(32)}`).set(loc.auth)).body.code).toBe('release_revoked');
+    // Matra ending it deletes the counselor's copy of the key too, in the same transaction
+    expect(wrapsOf(app, release.id).record).toBeNull();
     const [mine] = await requestsOf(app, a);
     expect(mine!.release).toMatchObject({ status: 'revoked', revokeReason: 'conflict' });
     const trail = (await request(app).get('/api/audit').set(a.auth)).body.events as Array<{ detail: string }>;

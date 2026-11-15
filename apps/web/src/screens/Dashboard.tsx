@@ -11,6 +11,7 @@ import { PhoneStepCard } from '../components/PhoneStepCard';
 import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
 import { shareLengthDays, shareLengthLabel } from '../lib/shareTerms';
+import { renewShare } from '../lib/renewShare';
 
 const AUDIT_TEXT: Record<string, string> = {
   'account.created': 'You created your space',
@@ -480,6 +481,7 @@ export function Dashboard() {
                 share={share}
                 attorney={attorney}
                 renewable={renewableShare(records, share.recordId)}
+                record={records.find((r) => r.meta.id === share.recordId)}
                 onChanged={() => { void shares.reload(); void audit.reload(); }}
               />
             ))}
@@ -646,8 +648,21 @@ function renewableShare(records: OpenedRecord[], recordId: string): 'yes' | 'leg
   return !r ? 'unknown' : isCleanFinal(r.payload) ? 'yes' : 'legacy';
 }
 
-function ShareRow({ share, attorney, renewable, onChanged }: { share: Share; attorney?: AttorneyProfile; renewable: 'yes' | 'legacy' | 'unknown'; onChanged(): void }) {
-  const { api } = useRequiredSession();
+function ShareRow({
+  share,
+  attorney,
+  renewable,
+  record,
+  onChanged,
+}: {
+  share: Share;
+  attorney?: AttorneyProfile;
+  renewable: 'yes' | 'legacy' | 'unknown';
+  /** the sealed version it shared, to lock it for the attorney again if their copy of the key was deleted */
+  record?: OpenedRecord;
+  onChanged(): void;
+}) {
+  const { api, session } = useRequiredSession();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -661,7 +676,7 @@ function ShareRow({ share, attorney, renewable, onChanged }: { share: Share; att
     setBusy(true);
     setError(null);
     try {
-      await api.renewShare(share.id, days);
+      await renewShare(api, session.masterKey, share, record, days);
       onChanged();
     } catch (e) {
       setError(friendlyError(e));
@@ -696,6 +711,12 @@ function ShareRow({ share, attorney, renewable, onChanged }: { share: Share; att
         </span>
         {share.status === 'active' ? expired ? <span className="badge neutral">Expired</span> : paused ? <span className="badge neutral">Paused</span> : <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
       </div>
+      {share.status === 'active' && expired && share.keyDeleted && (
+        <p className="small muted" style={{ margin: 0 }} data-testid="share-key-deleted">
+          Access ended more than 30 days ago, so Matra deleted the attorney’s copy of the key to your file. If you renew,
+          your file is locked for them again on this device first.
+        </p>
+      )}
       {paused && (
         <p className="small muted" style={{ margin: 0 }} data-testid="share-paused">
           This attorney is not verified by Matra right now, so they can’t open your file. You can revoke their access, or
