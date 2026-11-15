@@ -8,7 +8,7 @@
  * Never say "subpoena-proof", "bulletproof", "admissible" or "tamper-proof".
  */
 
-import { sharedFilesSentence, writtenAccountSentence, type DraftMode } from '@matra/shared';
+import { COUNSELOR_SUMMARY_SENTENCE, sharedFilesSentence, writtenAccountSentence, type DraftMode } from '@matra/shared';
 
 export interface Notice {
   id: string;
@@ -200,7 +200,7 @@ export function buildReportConsentStatement(p: {
   return [
     `I choose to share my sealed Matra account (sealed ${p.sealedAt}) with ${who}, the legal options counselor who asked for it, and with no one else.`,
     writtenAccountSentence(),
-    'Their app shows my written account laid out as an incident summary.',
+    COUNSELOR_SUMMARY_SENTENCE,
     sharedFilesSentence(p.files),
     `It is encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
     'It is not shared with anyone else who named the same person.',

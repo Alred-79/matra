@@ -3,10 +3,11 @@
  *
  * For each choice she can make on the attorney share screen and on the counselor release screen, the test drives the
  * real screen, takes what her device sends, opens it with the recipient's private key, and checks it against the
- * words, not against a second list kept here: each field the recipient can read must belong to a part of her account
- * that her consent statement names (ACCOUNT_PARTS, @matra/shared consent.ts), the files that open must be exactly the
- * ones she ticked and as many as the statement says, and the screen must show the same parts the statement names. Add
- * a field to her account, or drop words from the consent, and this fails.
+ * words: each field the recipient can read must have its own covering words (RECORD_FIELDS, @matra/shared consent.ts,
+ * typed over every nested field), and those words must be in the statement she agreed to; the files that open must be
+ * exactly the ones she ticked and as many as the statement says; the screen must show the same parts and every file
+ * name that travels. The words themselves are pinned literally in consentWords.test.ts, so the two can't move
+ * together unnoticed.
  */
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -23,10 +24,11 @@ import {
 } from '@matra/crypto';
 import {
   ACCOUNT_PARTS,
-  RECORD_FIELD_PART,
+  RECORD_FIELDS,
   SHARE_ALIAS_RE,
   consentMatches,
-  partForPath,
+  fieldWords,
+  type FieldWords,
   shareAliasSentence,
   statedFileCount,
   type AttorneyProfile,
@@ -66,6 +68,25 @@ const fullRecord: IntakeRecord = {
     ...sampleRecord.survivor,
     accessibility: { interpreter: 'yes', interpreterLanguage: 'Yoruba', otherNeeds: 'An advocate with me in person.' },
   },
+  incident: {
+    ...sampleRecord.incident,
+    dateEnd: '2026-08-15',
+    jurisdiction: { ...sampleRecord.incident.jurisdiction, campus: 'None' },
+  },
+  narrative: {
+    ...sampleRecord.narrative,
+    entries: [{ id: 'n1', createdAt: '2026-08-18T21:04:00Z', text: sampleRecord.narrative.freeRecall, source: 'voice' }],
+    sensory: { ...sampleRecord.narrative.sensory, taste: 'Wine.' },
+  },
+  perpetrators: [
+    {
+      ...sampleRecord.perpetrators[0]!,
+      identifiers: [{ kind: 'social_handle', platform: 'Instagram', value: '@derek.lawson.demo' }, ...sampleRecord.perpetrators[0]!.identifiers],
+      address: 'Somewhere in Highland Park',
+      whereabouts: 'Still at the agency',
+    },
+  ],
+  priorReports: [{ ...sampleRecord.priorReports[0]!, prosecutorFileNumber: 'MCPO-2026-118' }],
   physicalEvidence: { kinds: ['clothing'], description: 'The shirt I wore, in a paper bag in my closet.' },
   safety: { immediateSafety: 'safe', perpetratorHasAccess: true, wantsProtectiveOrder: 'unsure', notes: 'He knows where I live.' },
   financialImpact: {
@@ -134,7 +155,12 @@ interface Vault {
  * Everything wrong with what she sent, judged only by her consent statement (and the screen she saw). Empty means the
  * recipient can open exactly what she agreed to.
  */
-async function problems(sent: Sent, vault: Vault, privateKey: CryptoKey, saw: { parts: string[]; ticked: string[]; alias?: string }): Promise<string[]> {
+async function problems(
+  sent: Sent,
+  vault: Vault,
+  privateKey: CryptoKey,
+  saw: { parts: string[]; ticked: string[]; listed: string[]; alias?: string },
+): Promise<string[]> {
   const out: string[] = [];
   const st = sent.consentStatement;
   const promised = new Set(ACCOUNT_PARTS.filter((p) => st.includes(p.consent)).map((p) => p.id));
@@ -146,10 +172,18 @@ async function problems(sent: Sent, vault: Vault, privateKey: CryptoKey, saw: { 
   const top = Object.keys(payload).sort().join(',');
   if (top !== 'kind,record,savedAt') out.push(`the envelope holds more than her account: ${top}`);
   for (const path of leaves(payload.record)) {
-    const part = partForPath(path);
-    if (!part) out.push(`${path.join('.')}: no consent words cover it`);
-    else if (!promised.has(part)) out.push(`${path.join('.')}: readable, but the statement doesn't name "${part}"`);
+    const fw = fieldWords(path);
+    if (!fw) out.push(`${path.join('.')}: no consent words cover it`);
+    else if ('words' in fw) {
+      const part = ACCOUNT_PARTS.find((p) => p.id === fw.part)!;
+      // its own words, inside its part's words, inside the statement she agreed to
+      if (!(st.includes(fw.words) && part.consent.includes(fw.words) && promised.has(fw.part)))
+        out.push(`${path.join('.')}: readable, but the statement doesn't say "${fw.words}"`);
+    }
   }
+  // every file name that travels was on her screen
+  const names = payload.record.evidence.map((e) => e.fileName);
+  if ([...names].sort().join(',') !== [...saw.listed].sort().join(',')) out.push(`file names that travel: [${names}], on screen: [${saw.listed}]`);
 
   // the screen showed the same parts the statement names
   const promisedOrder = ACCOUNT_PARTS.filter((p) => promised.has(p.id)).map((p) => p.id);
@@ -183,7 +217,8 @@ async function problems(sent: Sent, vault: Vault, privateKey: CryptoKey, saw: { 
   for (const path of leaves(payload.record)) {
     const value = path.reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], payload.record);
     // free text, names and numbers (a one-word lowercase answer like "employer" can be one of the consent's own words)
-    if (typeof value === 'string' && value.length >= 6 && /[\sA-Z0-9@]/.test(value) && partForPath(path) !== 'sealed' && st.includes(value))
+    const fw = fieldWords(path);
+    if (typeof value === 'string' && value.length >= 6 && /[\sA-Z0-9@]/.test(value) && !(fw && 'part' in fw && fw.part === 'sealed') && st.includes(value))
       out.push(`the statement carries "${value}" from her account`);
   }
   return out;
@@ -197,7 +232,10 @@ async function space(record: IntakeRecord, mk: CryptoKey, extra: (url: URL, init
   const evidence: EvidenceItem[] = [];
   for (const [i, f] of FILES.entries()) {
     const bytes = new TextEncoder().encode(f.bytes);
-    const item: EvidenceItem = { id: `ev${i}`, kind: 'photo', fileName: f.name, mimeType: 'application/octet-stream', sizeBytes: bytes.length, sha256: await sha256Hex(bytes), metadataStripped: true };
+    const item: EvidenceItem = {
+      id: `ev${i}`, kind: 'photo', fileName: f.name, mimeType: 'application/octet-stream', sizeBytes: bytes.length, sha256: await sha256Hex(bytes),
+      metadataStripped: true, description: `About ${f.name}`, capturedAt: '2026-08-16',
+    };
     if (f.upload) {
       const key = await generateContentKey();
       item.blobId = `b${i}`;
@@ -221,6 +259,12 @@ const partsOnScreen = () =>
   within(screen.getByTestId('account-parts'))
     .getAllByRole('listitem')
     .map((li) => li.getAttribute('data-part')!);
+
+/** Every file name the screen says travels with her account. */
+const listedOnScreen = () =>
+  within(screen.getByTestId('listed-files'))
+    .getAllByRole('listitem')
+    .map((li) => li.getAttribute('data-file')!);
 
 function Gate() {
   return useSession().session ? <Share /> : <p>Signed out</p>;
@@ -273,11 +317,12 @@ async function shareWithAttorney(record: IntakeRecord, ticked: string[], usernam
   for (const name of ticked) await user.click(screen.getByLabelText(new RegExp(name)));
   const alias = /“(Client [^”]+)”/.exec(screen.getByTestId('share-alias').textContent ?? '')?.[1];
   const parts = partsOnScreen();
+  const listed = listedOnScreen();
   await user.click(screen.getByLabelText('I agree to the statement above.'));
   await user.click(screen.getByRole('button', { name: /Yes, share with Attorney Test/ }));
   await screen.findByText(/Shared with Attorney Test/, {}, { timeout: 15_000 });
   expect(sent).toHaveLength(1);
-  return { sent: sent[0]!, vault: built.vault, privateKey: current!.session!.privateKey, saw: { parts, ticked, alias }, username };
+  return { sent: sent[0]!, vault: built.vault, privateKey: current!.session!.privateKey, saw: { parts, ticked, listed, alias }, username };
 }
 
 /** She opens the counselor's request, ticks `ticked`, confirms the key, agrees, says yes. Returns what her device sent. */
@@ -320,24 +365,64 @@ async function releaseToCounselor(ticked: string[], username: string) {
   for (const f of FILES.filter((x) => x.upload)) expect(screen.getByLabelText(new RegExp(f.name))).not.toBeChecked();
   for (const name of ticked) await user.click(screen.getByLabelText(new RegExp(name)));
   const parts = partsOnScreen();
+  const listed = listedOnScreen();
   await user.click(screen.getByLabelText('This matches what the counselor told me.'));
   await user.click(screen.getByLabelText('I agree to the statement above.'));
   await user.click(screen.getByRole('button', { name: 'Yes, share my report' }));
   await vi.waitFor(() => expect(sent).toHaveLength(1), { timeout: 15_000 });
-  return { sent: sent[0]!, vault: built.vault, privateKey: s.privateKey, saw: { parts, ticked } };
+  return { sent: sent[0]!, vault: built.vault, privateKey: s.privateKey, saw: { parts, ticked, listed } };
 }
 
 const NONE: string[] = [];
 const ONE = ['sunday-text.png'];
 const BOTH = ['wrists-photo.jpg', 'sunday-text.png'];
 
+/** Every leaf path of the field map, e.g. ['evidence', 'sizeBytes'] (array elements without an index). */
+function mapPaths(node: unknown, path: string[] = []): string[][] {
+  if (typeof node === 'object' && node !== null && !('words' in node) && !('internal' in node))
+    return Object.entries(node).flatMap(([k, v]) => mapPaths(v, [...path, k]));
+  return [path];
+}
+
+/** The value at a field-map path in a record, through the first element of each array. */
+function valueAt(rec: unknown, path: string[]): unknown {
+  let v = rec;
+  for (const k of path) {
+    if (Array.isArray(v)) v = v[0];
+    v = (v as Record<string, unknown> | undefined)?.[k];
+  }
+  return Array.isArray(v) ? v[0] : v;
+}
+
+/** fullRecord with an evidence item that has every field, for the coverage check. */
+const everyField: IntakeRecord = {
+  ...fullRecord,
+  evidence: [{ id: 'e', kind: 'photo', fileName: 'a.jpg', mimeType: 'image/jpeg', sizeBytes: 1, sha256: 'f'.repeat(64), blobId: 'b', description: 'd', capturedAt: '2026-08-16', metadataStripped: true }],
+};
+
 describe('the consent words cover every field of her account', () => {
-  it('her full test account fills in every field the words are mapped from', () => {
-    for (const k of Object.keys(RECORD_FIELD_PART)) expect(fullRecord, k).toHaveProperty(k);
-    for (const k of Object.keys(RECORD_FIELD_PART.survivor)) expect(fullRecord.survivor, `survivor.${k}`).toHaveProperty(k);
-    for (const path of leaves(fullRecord)) expect(partForPath(path), path.join('.')).toBeDefined();
-    expect(partForPath(['survivor', 'somethingNew'])).toBeUndefined();
-    expect(partForPath(['somethingNew'])).toBeUndefined();
+  it('every field (nested ones too) has covering words that are inside its part’s consent words', () => {
+    const paths = mapPaths(RECORD_FIELDS);
+    expect(paths.length).toBeGreaterThan(100);
+    for (const path of paths) {
+      const fw = fieldWords(path) as FieldWords;
+      expect(fw, path.join('.')).toBeDefined();
+      if ('words' in fw) expect(ACCOUNT_PARTS.find((p) => p.id === fw.part)!.consent, path.join('.')).toContain(fw.words);
+      else expect(fw.internal.length, path.join('.')).toBeGreaterThan(20);
+    }
+  });
+
+  it('the test account fills in every field, so every field’s words are exercised against what decrypts', () => {
+    const missing = mapPaths(RECORD_FIELDS).filter((p) => valueAt(everyField, p) === undefined);
+    expect(missing.map((p) => p.join('.'))).toEqual([]);
+    for (const path of leaves(everyField)) expect(fieldWords(path), path.join('.')).toBeDefined();
+  });
+
+  it('a field outside the map is caught, not covered by its parent’s words', () => {
+    expect(fieldWords(['compensation', 'bankAccountNumber'])).toBeUndefined();
+    expect(fieldWords(['evidence', '0', 'gpsLatLong'])).toBeUndefined();
+    expect(fieldWords(['survivor'])).toBeUndefined();
+    expect(fieldWords(['evidence', '3', 'sizeBytes'])).toEqual({ part: 'evidenceList', words: 'sizes' });
   });
 });
 
@@ -361,9 +446,21 @@ describe('attorney share: what the attorney can decrypt is exactly what her cons
     const contact = ACCOUNT_PARTS.find((p) => p.id === 'contact')!;
     const narrowed = { ...r.sent, consentStatement: r.sent.consentStatement.replace(evidenceList.consent, '').replace(contact.consent, '') };
     const found = await problems(narrowed, r.vault, r.privateKey, r.saw);
-    expect(found).toContain('survivor.phone: readable, but the statement doesn\'t name "contact"');
-    expect(found).toContain('evidence.0.fileName: readable, but the statement doesn\'t name "evidenceList"');
+    expect(found).toContain('survivor.phone: readable, but the statement doesn\'t say "phone number"');
+    expect(found).toContain('evidence.0.fileName: readable, but the statement doesn\'t say "names"');
     expect(found.some((p) => p.startsWith('screen shows'))).toBe(true);
+    // the reviewer's drift: the contact words say something else, and fields appear that no words cover
+    const reworded = { ...r.sent, consentStatement: r.sent.consentStatement.replace(contact.consent, 'my preferred greeting') };
+    expect(await problems(reworded, r.vault, r.privateKey, r.saw)).toContain('survivor.email: readable, but the statement doesn\'t say "email"');
+    cleanup();
+    const extra = await shareWithAttorney(
+      { ...fullRecord, compensation: { ...fullRecord.compensation, bankAccountNumber: '021000021-998877' } } as IntakeRecord,
+      NONE,
+      'wren-teeth-extra',
+    );
+    expect(await problems(extra.sent, extra.vault, extra.privateKey, extra.saw)).toContain('compensation.bankAccountNumber: no consent words cover it');
+    const hidden = await problems(r.sent, r.vault, r.privateKey, { ...r.saw, listed: r.saw.listed.slice(1) });
+    expect(hidden.some((p) => p.startsWith('file names that travel'))).toBe(true);
     const extraFile = await problems(r.sent, r.vault, r.privateKey, { ...r.saw, ticked: [] });
     expect(extraFile).toContain('files that open: [sunday-text.png], ticked: []');
     const leaked = await problems({ ...r.sent, consentStatement: `${r.sent.consentStatement}\n${fullRecord.survivor.legalName}` }, r.vault, r.privateKey, r.saw);

@@ -418,10 +418,11 @@ const toBlobMeta = (b: BlobRow): BlobMeta => ({
   ownerWrappedKey: JSON.parse(b.owner_wrapped_key),
 });
 
-const toShare = (s: ShareRow): Share => ({
+/** A share as one side sees it. The attorney's copy leaves out her account id, so her shares to them link by nothing the server adds. */
+const toShare = (s: ShareRow, forAttorney = false): Share => ({
   id: s.id,
   recordId: s.record_id,
-  survivorId: s.survivor_id,
+  ...(!forAttorney && { survivorId: s.survivor_id }),
   attorneyId: s.attorney_id,
   status: s.status,
   consentStatement: s.consent_statement,
@@ -1384,7 +1385,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (me.role === 'attorney') {
       assertVerifiedAttorney(me.id);
       const rows = db.prepare('SELECT * FROM shares WHERE attorney_id = ? ORDER BY created_at DESC, rowid DESC').all(me.id) as ShareRow[];
-      return res.json({ shares: rows.map(toShare) });
+      return res.json({ shares: rows.map((r) => toShare(r, true)) });
     }
     // Her own list also says whether each attorney is verified right now: an unverified attorney's access is paused.
     const rows = db
@@ -1395,7 +1396,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
           WHERE s.survivor_id = ? ORDER BY s.created_at DESC, s.rowid DESC`,
       )
       .all(me.id) as ShareRow[];
-    res.json({ shares: rows.map(toShare) });
+    res.json({ shares: rows.map((r) => toShare(r)) });
   });
 
   app.get('/api/shares/:id/bundle', auth, attorneyOnly, verifiedAttorney, (req, res) => {
@@ -1416,7 +1417,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       )
       .all(s.id) as Array<{ blob_id: string; recipient_wrapped_key: string; content_hash: string; size_bytes: number }>;
     const bundle: ShareBundle = {
-      share: toShare(s),
+      share: toShare(s, true),
       record: {
         id: r.id,
         envelope: JSON.parse(r.envelope),

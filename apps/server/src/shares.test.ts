@@ -7,7 +7,7 @@ import {
   wrapKeyForRecipient,
 } from '@matra/crypto';
 import { checkAttorneyKey, generateRosterKey, publicKeyFingerprint, toBase64 } from '@matra/crypto';
-import { sharedFilesSentence, writtenAccountSentence, type AttorneysResponse } from '@matra/shared';
+import { shareAliasSentence, sharedFilesSentence, writtenAccountSentence, type AttorneysResponse } from '@matra/shared';
 import { TEST_ALIAS, createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, shareConsent, uploadBlob } from './test-helpers.js';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
 import { setVerified } from './attorney-verification.js';
@@ -54,7 +54,10 @@ describe('shares', () => {
     expect(created.body.ledgerEntry.type).toBe('share.granted');
 
     expect((await request(app).get('/api/shares').set(jane.auth)).body.shares).toHaveLength(1);
-    expect((await request(app).get('/api/shares').set(atty.auth)).body.shares).toHaveLength(1);
+    const attyList = (await request(app).get('/api/shares').set(atty.auth)).body.shares;
+    expect(attyList).toHaveLength(1);
+    expect(attyList[0]).not.toHaveProperty('survivorId'); // her account id never reaches the attorney
+    expect(attyList[0].survivorAlias).toBe(TEST_ALIAS);
     expect((await request(app).get('/api/shares').set(other.auth)).body.shares).toHaveLength(0);
 
     // attorney opens bundle and decrypts
@@ -63,6 +66,8 @@ describe('shares', () => {
     const rk = await unwrapKeyWithPrivate(bundle.body.recipientWrappedKey, atty.privateKey);
     expect(await decryptJSON(bundle.body.record.envelope, rk)).toEqual({ narrative: 'shared words' });
     expect(bundle.body.survivorAlias).toBe(TEST_ALIAS);
+    expect(bundle.body.share).not.toHaveProperty('survivorId');
+    expect(JSON.stringify(bundle.body)).not.toContain(jane.user.id);
     expect(bundle.body.blobs).toHaveLength(1);
     // attorneys no longer receive any sealed-match information (counts went to the Legal Options Counselor role)
     expect(bundle.body).not.toHaveProperty('escrow');
@@ -165,6 +170,16 @@ describe('shares', () => {
     expect(await code({ consentStatement: shareConsent(FP, 0, 'Client ZZZZZ') })).toBe('consent_mismatch'); // names another label
     expect(await code({ survivorAlias: 'jane.test', consentStatement: shareConsent(FP, 0, 'jane.test') })).toBe('invalid_request'); // never her username
     expect(await code({ survivorAlias: 'Client AEIOU', consentStatement: shareConsent(FP, 0, 'Client AEIOU') })).toBe('invalid_request');
+    // word for word, line by line: text appended to a valid statement that contradicts it, or names another label, is refused
+    const plus = (line: string) => code({ consentStatement: `${shareConsent(FP, 0)}\n${line}` });
+    expect(await plus('I am NOT sharing my written account.')).toBe('consent_mismatch');
+    expect(await plus('I am sharing no evidence files at all.')).toBe('consent_mismatch');
+    expect(await plus('Matra shows this share as "jane.real-name".')).toBe('consent_mismatch');
+    expect(await plus(shareAliasSentence(TEST_ALIAS))).toBe('consent_mismatch'); // the label twice
+    expect(await plus('My username is jane.test.')).toBe('consent_mismatch');
+    expect(await code({ consentStatement: shareConsent(FP, 0).replace(writtenAccountSentence(), `${writtenAccountSentence()} Except my phone.`) })).toBe(
+      'consent_mismatch',
+    );
     expect((await request(app).get('/api/shares').set(jane.auth)).body.shares).toHaveLength(0);
     expect((await request(app).post('/api/shares').set(jane.auth).send(base)).status).toBe(201);
     expect((await request(app).post('/api/shares').set(jane.auth).send({ ...base, scope: ['record', 'evidence'], blobs: one, consentStatement: shareConsent(FP, 1) })).status).toBe(201);
@@ -212,6 +227,38 @@ describe('shares', () => {
     await request(app).post(`/api/shares/${share.id}/revoke`).set(jane.auth);
     expect((await request(app).post(`/api/shares/${share.id}/renew`).set(jane.auth)).status).toBe(409);
     expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
+  });
+});
+
+describe('shares made before the consent words were checked', () => {
+  it('a pre-B5 share (incident summary in its scope, her username as its label, old wording) still opens, renews and revokes', async () => {
+    const { app, db } = makeApp();
+    const jane = await registerUser(app, 'jane.old');
+    const atty = await registerUser(app, 'atty.old', 'attorney');
+    const { res, key } = await createRecord(app, jane, { narrative: 'old words' });
+    const FP = await publicKeyFingerprint(atty.user.publicKey);
+    const id = 'f'.repeat(32);
+    db.prepare(
+      `INSERT INTO shares (id, record_id, survivor_id, attorney_id, status, consent_statement, scope, recipient_wrapped_key,
+                           survivor_alias, created_at, revoked_at, expires_at, ledger_entry_id)
+       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, 'jane.old', ?, NULL, ?, ?)`,
+    ).run(
+      id,
+      res.body.record.id,
+      jane.user.id,
+      atty.user.id,
+      `I, "jane.old", choose to share my sealed Matra file. I am sharing: my written account; the incident summary. Key ${FP}.`,
+      JSON.stringify(['record', 'brief']),
+      JSON.stringify(await wrapKeyForRecipient(key, atty.user.publicKey)),
+      new Date().toISOString(),
+      new Date(Date.now() + 86_400_000).toISOString(),
+      res.body.ledgerEntry.id,
+    );
+    const bundle = await request(app).get(`/api/shares/${id}/bundle`).set(atty.auth);
+    expect(bundle.status).toBe(200);
+    expect(bundle.body.share.scope).toEqual(['record', 'brief']);
+    expect((await request(app).post(`/api/shares/${id}/renew`).set(jane.auth).send({ expiresInDays: 30 })).status).toBe(200);
+    expect((await request(app).post(`/api/shares/${id}/revoke`).set(jane.auth)).status).toBe(200);
   });
 });
 

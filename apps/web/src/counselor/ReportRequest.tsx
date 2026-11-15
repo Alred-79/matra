@@ -240,7 +240,7 @@ export function ReportRequest() {
                     recipient="the counselor"
                     summaryLine={COUNSELOR_SUMMARY_LINE}
                     files={evidence}
-                    listed={listed.length}
+                    listed={listed}
                     chosen={chosen}
                     onChange={setChosen}
                   />

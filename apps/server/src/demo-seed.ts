@@ -53,7 +53,7 @@ import {
   type MatchTransport,
 } from '@matra/crypto';
 import type { AttorneyProfile, AuthResponse, EvidenceItem, EvidenceKind, IntakeRecord, MatchContactPreferences, MatchStates, RegisterRequest } from '@matra/shared';
-import { shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
+import { ATTORNEY_SUMMARY_SENTENCE, shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
 
 /** The label attorney.nj1 sees for Riley's seeded share (her app makes one up per share; this one is fixed for the demo script). */
 const RILEY_SHARE_ALIAS = 'Client RLDM3';
@@ -436,7 +436,7 @@ async function main() {
         `I choose to share my sealed Matra file (sealed ${rileyRecord.createdAt}) with ${alex.displayName} of ${alex.organization}, a verified attorney, so that they can advise me.`,
         shareAliasSentence(RILEY_SHARE_ALIAS),
         writtenAccountSentence(),
-        'Their app can lay my written account out as an incident summary, which they can download as a PDF.',
+        ATTORNEY_SUMMARY_SENTENCE,
         sharedFilesSentence(rileyFiles.length),
         `It will be encrypted on my device so that only the holder of the key with fingerprint ${fp} can open it.`,
         'This access expires 90 days after the date below unless I renew it. (Demo seed.)',

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { checkAttorneyKey, wrapKeyForRecipient, type AttorneyKeyCheck } from '@matra/crypto';
 import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
-import { newShareAlias, shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
+import { ATTORNEY_SUMMARY_SENTENCE, newShareAlias, shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
 import { ShareContents } from '../components/ShareContents';
@@ -17,7 +17,6 @@ type Scope = ShareT['scope'][number];
 
 /** What the attorney's app does with her account: the summary is laid out from it, so it is never a separate choice. */
 export const ATTORNEY_SUMMARY_LINE = 'Their app can lay your written account out as an incident summary, which they can download as a PDF.';
-const ATTORNEY_SUMMARY_SENTENCE = 'Their app can lay my written account out as an incident summary, which they can download as a PDF.';
 
 export const SHARE_DISCLAIMER =
   'This does not report anything to police. The attorney can read and save what you share. You can revoke access at any time. Access also ends on its own on the expiry date, unless you renew it. Revoking or expiry stops future access, but it can’t erase what was already viewed or saved.';
@@ -355,13 +354,13 @@ function Consent({
         recipient="the attorney"
         summaryLine={ATTORNEY_SUMMARY_LINE}
         files={evidence}
-        listed={listed.length}
+        listed={listed}
         chosen={chosen}
         onChange={setChosen}
       />
       <p className="card soft small" style={{ margin: 0 }} data-testid="share-alias">
         In their list, this share is called <strong>“{alias}”</strong>. We made up that name for this share only. It isn’t
-        your username, and your other shares get different names.
+        the alias you sign in with, and your other shares get different names.
       </p>
       <label className="card field">
         <span>How long should they have access?</span>

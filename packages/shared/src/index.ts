@@ -353,7 +353,8 @@ export type ShareStatus = 'active' | 'revoked';
 export interface Share {
   id: string;
   recordId: string;
-  survivorId: string;
+  /** Her own list only: an attorney never gets her account id. */
+  survivorId?: string;
   attorneyId: string;
   status: ShareStatus;
   /** Exact consent text the survivor agreed to */

@@ -243,6 +243,8 @@ describe('stage 2: report requests and her decision', () => {
     expect((await send({ consentStatement: `I share with key ${fp}.` })).body.code).toBe('consent_mismatch');
     expect((await send({ blobs: oneFile })).body.code).toBe('consent_mismatch'); // says no files, wraps one
     expect((await send({ consentStatement: releaseConsent(fp, 1) })).body.code).toBe('consent_mismatch'); // says one, wraps none
+    expect((await send({ consentStatement: `${releaseConsent(fp, 0)}\nI am NOT sharing my written account.` })).body.code).toBe('consent_mismatch');
+    expect((await send({ consentStatement: `${releaseConsent(fp, 0)}\nMatra shows this share to them as "Client BCDFG".` })).body.code).toBe('consent_mismatch'); // a release has no label
     expect((await send({ recordId: recB.res.body.record.id })).status).toBe(403);
     const bBlob = await uploadBlob(app, b);
     expect((await send({ blobs: [{ blobId: bBlob.res.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(bBlob.key, req!.counselor.publicKey) }] })).status).toBe(403);

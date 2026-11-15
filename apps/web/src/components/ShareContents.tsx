@@ -22,8 +22,8 @@ export function ShareContents({
   summaryLine: string;
   /** her uploaded files, the only ones that can be shared */
   files: EvidenceItem[];
-  /** how many files her written account lists (uploaded or not) */
-  listed: number;
+  /** every file her written account lists (uploaded or not): all of their names travel with it */
+  listed: EvidenceItem[];
   chosen: ReadonlySet<string>;
   onChange(next: Set<string>): void;
 }) {
@@ -86,11 +86,22 @@ export function ShareContents({
             )}
           </>
         )}
-        {listed > 0 && (
-          <p className="small muted" style={{ margin: 0 }}>
-            Your written account names {listed === 1 ? 'your file' : `all ${listed} of your files`} either way (names,
-            descriptions, dates and fingerprints). Only a file you tick can be opened.
-          </p>
+        {listed.length > 0 && (
+          <>
+            <p className="small muted" style={{ margin: 0 }}>
+              Your written account lists {listed.length === 1 ? 'this file' : `all ${listed.length} of these files`} either
+              way, with their names, file types and sizes, descriptions, dates and fingerprints. Only a file you tick can be
+              opened.
+            </p>
+            <ul className="small muted" style={{ margin: 0, paddingLeft: '1.2em' }} data-testid="listed-files">
+              {listed.map((f) => (
+                <li key={f.id} data-file={f.fileName}>
+                  {f.fileName}{' '}
+                  {!f.blobId ? '(listed only: never uploaded)' : chosen.has(f.blobId) ? '(listed, and the file is shared)' : '(listed only: not ticked)'}
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </fieldset>
     </section>
