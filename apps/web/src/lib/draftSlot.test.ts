@@ -120,7 +120,7 @@ describe('draft slot', () => {
     const { api } = slotServer();
     const draft = withAnswers(
       { 'person.escrow': { p1: 'yes' }, 'person.matchContact': { method: 'text', detail: '555-0100' }, 'about.name': 'J' },
-      { pending: { stepId: 'person.matchContact', value: { detail: '555' } }, space: { pending: { 'person.matchContact': { detail: '5' }, 'about.name': 'Je' } } },
+      { pending: { stepId: 'person.matchContact', value: { detail: 'sentinel-pending' } }, space: { pending: { 'person.matchContact': { detail: '5' }, 'about.name': 'Je' } } },
     );
     await saveDraftSlot(api, masterKey, { draft, evidence: [], escrowedHashes: ['h1'] }, null);
     const v = (await loadDraftSlot(api, masterKey)).slot!.value;
@@ -128,7 +128,9 @@ describe('draft slot', () => {
     expect(Object.keys(v.draft!.answers)).toEqual(['about.name']);
     expect(v.draft!.pending).toBeUndefined();
     expect(v.draft!.space?.pending).toEqual({ 'about.name': 'Je' });
-    expect(JSON.stringify(v)).not.toContain('555');
+    // distinctive strings: a bare '555' also turns up in a timestamp's milliseconds one run in about a thousand
+    expect(JSON.stringify(v)).not.toContain('sentinel');
+    expect(JSON.stringify(v)).not.toContain('555-0100');
   });
 
   it('with sealed matching on, keeps both (her matching choices live only in her slot, never in a sealed record)', async () => {

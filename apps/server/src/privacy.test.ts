@@ -26,7 +26,8 @@ describe('ClientKeyer: daily-salted keyed hash of the client address', () => {
     expect(k.keyFor('203.0.113.77')).toBe(a);
     expect(k.keyFor('203.0.113.78')).not.toBe(a);
     expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(a).not.toContain('203');
+    // the whole address, not a fragment: the key is random base64url, so '203' alone turns up by chance about once in 6,000 salts
+    expect(a).not.toContain('203.0.113.77');
   });
 
   it('rotates its salt at midnight UTC, so keys cannot be linked across days', () => {
