@@ -7,8 +7,8 @@ import {
   wrapKeyForRecipient,
 } from '@matra/crypto';
 import { checkAttorneyKey, generateRosterKey, publicKeyFingerprint, toBase64 } from '@matra/crypto';
-import type { AttorneysResponse } from '@matra/shared';
-import { createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, uploadBlob } from './test-helpers.js';
+import { sharedFilesSentence, writtenAccountSentence, type AttorneysResponse } from '@matra/shared';
+import { TEST_ALIAS, createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, shareConsent, uploadBlob } from './test-helpers.js';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
 import { setVerified } from './attorney-verification.js';
 
@@ -17,8 +17,6 @@ const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
   res.on('data', (c: Buffer) => chunks.push(c));
   res.on('end', () => cb(null, Buffer.concat(chunks)));
 };
-
-const consentFor = (fp: string) => `I consent to share my case file with this attorney for legal consultation. Key ${fp}.`;
 
 describe('shares', () => {
   it('grant → attorney decrypts bundle + blob → audit → revoke → 403', async () => {
@@ -42,17 +40,17 @@ describe('shares', () => {
       attorneyId: atty.user.id,
       recipientWrappedKey: await wrapKeyForRecipient(recKey, pub),
       blobs: [{ blobId, recipientWrappedKey: await wrapKeyForRecipient(blobKey, pub) }],
-      consentStatement: consentFor(FP),
+      consentStatement: shareConsent(FP, 1),
       attorneyKeyFingerprint: FP,
       scope: ['record', 'evidence'],
-      survivorAlias: 'J.',
+      survivorAlias: TEST_ALIAS,
     };
     // attorneys cannot create shares
     expect((await request(app).post('/api/shares').set(atty.auth).send(body)).status).toBe(403);
     const created = await request(app).post('/api/shares').set(jane.auth).send(body);
     expect(created.status).toBe(201);
     const share = created.body.share;
-    expect(share).toMatchObject({ status: 'active', consentStatement: consentFor(FP), survivorId: jane.user.id });
+    expect(share).toMatchObject({ status: 'active', consentStatement: shareConsent(FP, 1), survivorId: jane.user.id });
     expect(created.body.ledgerEntry.type).toBe('share.granted');
 
     expect((await request(app).get('/api/shares').set(jane.auth)).body.shares).toHaveLength(1);
@@ -64,7 +62,7 @@ describe('shares', () => {
     expect(bundle.status).toBe(200);
     const rk = await unwrapKeyWithPrivate(bundle.body.recipientWrappedKey, atty.privateKey);
     expect(await decryptJSON(bundle.body.record.envelope, rk)).toEqual({ narrative: 'shared words' });
-    expect(bundle.body.survivorAlias).toBe('J.');
+    expect(bundle.body.survivorAlias).toBe(TEST_ALIAS);
     expect(bundle.body.blobs).toHaveLength(1);
     // attorneys no longer receive any sealed-match information (counts went to the Legal Options Counselor role)
     expect(bundle.body).not.toHaveProperty('escrow');
@@ -120,10 +118,10 @@ describe('shares', () => {
       attorneyId: atty.user.id,
       recipientWrappedKey: wk,
       blobs: [] as Array<{ blobId: string; recipientWrappedKey: typeof wk }>,
-      consentStatement: consentFor(FP),
+      consentStatement: shareConsent(FP, 0),
       attorneyKeyFingerprint: FP,
       scope: ['record'],
-      survivorAlias: 'J.',
+      survivorAlias: TEST_ALIAS,
     };
     expect((await request(app).post('/api/shares').set(mallory.auth).send(base)).status).toBe(403);
     const unv = await request(app).post('/api/shares').set(jane.auth).send({ ...base, attorneyId: unverified.user.id });
@@ -146,7 +144,7 @@ describe('shares', () => {
     const swapped = await request(app)
       .post('/api/shares')
       .set(jane.auth)
-      .send({ ...base, attorneyKeyFingerprint: other, consentStatement: consentFor(other) });
+      .send({ ...base, attorneyKeyFingerprint: other, consentStatement: shareConsent(other, 0) });
     expect(swapped.status).toBe(409);
     expect(swapped.body.code).toBe('attorney_key_mismatch');
     const noFpInText = await request(app)
@@ -154,7 +152,22 @@ describe('shares', () => {
       .set(jane.auth)
       .send({ ...base, consentStatement: 'I consent to share my case file with this attorney.' });
     expect(noFpInText.body.code).toBe('consent_fingerprint_missing');
+    // The scope and her consent text must say exactly what is wrapped (@matra/shared consent.ts).
+    const code = async (over: Record<string, unknown>) => (await request(app).post('/api/shares').set(jane.auth).send({ ...base, ...over })).body.code;
+    const one = [{ blobId: ownBlob, recipientWrappedKey: wk }];
+    expect(await code({ scope: ['record', 'brief'] })).toBe('scope_mismatch'); // the summary is laid out from the account: not a choice
+    expect(await code({ scope: ['evidence'], blobs: one, consentStatement: shareConsent(FP, 1) })).toBe('scope_mismatch'); // the account is always wrapped
+    expect(await code({ scope: ['record', 'evidence'] })).toBe('scope_mismatch'); // names files, wraps none
+    expect(await code({ consentStatement: shareConsent(FP, 1) })).toBe('consent_mismatch'); // says one file, wraps none
+    expect(await code({ scope: ['record', 'evidence'], blobs: one })).toBe('consent_mismatch'); // says none, wraps one
+    expect(await code({ consentStatement: `${shareConsent(FP, 0)}\n${sharedFilesSentence(1)}` })).toBe('consent_mismatch'); // says both
+    expect(await code({ consentStatement: shareConsent(FP, 0).replace(writtenAccountSentence(), 'I am sharing my written account.') })).toBe('consent_mismatch');
+    expect(await code({ consentStatement: shareConsent(FP, 0, 'Client ZZZZZ') })).toBe('consent_mismatch'); // names another label
+    expect(await code({ survivorAlias: 'jane.test', consentStatement: shareConsent(FP, 0, 'jane.test') })).toBe('invalid_request'); // never her username
+    expect(await code({ survivorAlias: 'Client AEIOU', consentStatement: shareConsent(FP, 0, 'Client AEIOU') })).toBe('invalid_request');
+    expect((await request(app).get('/api/shares').set(jane.auth)).body.shares).toHaveLength(0);
     expect((await request(app).post('/api/shares').set(jane.auth).send(base)).status).toBe(201);
+    expect((await request(app).post('/api/shares').set(jane.auth).send({ ...base, scope: ['record', 'evidence'], blobs: one, consentStatement: shareConsent(FP, 1) })).status).toBe(201);
   });
 
   it('expires shares server-side (bundle + blob), and renewal restores access', async () => {
@@ -170,10 +183,10 @@ describe('shares', () => {
       attorneyId: atty.user.id,
       recipientWrappedKey: await wrapKeyForRecipient(key, pub),
       blobs: [{ blobId: blobRes.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(blobKey, pub) }],
-      consentStatement: consentFor(FP),
+      consentStatement: shareConsent(FP, 1),
       attorneyKeyFingerprint: FP,
       scope: ['record', 'evidence'],
-      survivorAlias: 'J.',
+      survivorAlias: TEST_ALIAS,
     };
     expect((await request(app).post('/api/shares').set(jane.auth).send({ ...body, expiresInDays: 0 })).status).toBe(400);
     const created = await request(app).post('/api/shares').set(jane.auth).send(body);
@@ -220,10 +233,10 @@ describe('unverifying an attorney pauses access to existing shares', () => {
         attorneyId: atty.user.id,
         recipientWrappedKey: await wrapKeyForRecipient(recKey, pub),
         blobs: [{ blobId, recipientWrappedKey: await wrapKeyForRecipient(blobKey, pub) }],
-        consentStatement: consentFor(FP),
+        consentStatement: shareConsent(FP, 1),
         attorneyKeyFingerprint: FP,
         scope: ['record', 'evidence'],
-        survivorAlias: 'J.',
+        survivorAlias: TEST_ALIAS,
       });
     expect(created.status).toBe(201);
     const shareId = created.body.share.id;

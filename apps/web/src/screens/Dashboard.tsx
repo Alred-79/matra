@@ -131,8 +131,11 @@ export function formatRange(fromIso: string, toIso: string): string {
   }
 }
 
+// 'brief' only on shares made before the summary stopped being a separate choice
 const SCOPE_WORDS: Record<string, string> = { record: 'written story', evidence: 'evidence files', brief: 'summary' };
-const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(', ');
+/** "written story, 2 evidence files": how many files when her list says (it carries the share's file ids). */
+const scopeText = (scope: string[], files?: number) =>
+  scope.map((x) => (x === 'evidence' && files ? plural(files, 'evidence file') : (SCOPE_WORDS[x] ?? x))).join(', ');
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function Dashboard() {
@@ -718,7 +721,8 @@ function ShareRow({
           {attorney?.organization && <span className="small muted"> · {attorney.organization}</span>}
           <br />
           <span className="small muted">
-            Shared {formatDate(share.createdAt)} · {scopeText(share.scope)}
+            Shared {formatDate(share.createdAt)} · {scopeText(share.scope, share.blobIds?.length)}
+            {share.survivorAlias && <> · called “{share.survivorAlias}”</>}
             {share.status === 'active' && <> · {expired ? 'ended' : 'until'} {formatDate(share.expiresAt)}</>}
           </span>
         </span>

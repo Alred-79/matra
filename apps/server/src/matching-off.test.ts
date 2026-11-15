@@ -22,7 +22,7 @@ import {
   loadMatchingMode,
   matchingOnlyVarsSet,
 } from './matching-off.js';
-import { TEST_PEPPER, createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
+import { TEST_ALIAS, TEST_PEPPER, shareConsent, createRecord, defaultProfile, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
 import { checkAttorneyKey, generateRosterKey, toBase64 } from '@matra/crypto';
 import type { AttorneysResponse } from '@matra/shared';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
@@ -127,10 +127,10 @@ describe('matching off: the server', () => {
         attorneyId: atty.user.id,
         recipientWrappedKey: await wrapKeyForRecipient(key, atty.user.publicKey),
         blobs: [{ blobId: blob.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(blobKey, atty.user.publicKey) }],
-        consentStatement: `I consent to share my case file with this attorney. Key ${fp}.`,
+        consentStatement: shareConsent(fp, 1),
         attorneyKeyFingerprint: fp,
         scope: ['record', 'evidence'],
-        survivorAlias: 'J.',
+        survivorAlias: TEST_ALIAS,
       });
     expect(share.status).toBe(201);
     expect((await request(app).get(`/api/shares/${share.body.share.id}/bundle`).set(atty.auth)).status).toBe(200);

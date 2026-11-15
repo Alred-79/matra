@@ -72,7 +72,7 @@
 - Optional: on **Your vault**, **Download my data** produces one .zip decrypted on her device (records, evidence, manifest with hashes). It warns first that the file is not encrypted.
 
 ### 7. Share to an attorney (6:00-7:00)
-- Choose **`attorney.nj1`** from the verified list. Read the consent text aloud. Select the scope (record plus evidence). Share.
+- Choose **`attorney.nj1`** from the verified list. Read the consent text aloud: her written account is always shared, whole, and it says what that holds. Tick the evidence files to share (none are ticked to start). Share.
 - **Talking point:** *"The record key is re-encrypted to this attorney's public key. The exact consent text is hashed into the ledger. Only verified attorneys appear."*
 
 ### 8. Attorney view and access log (7:00-8:00)

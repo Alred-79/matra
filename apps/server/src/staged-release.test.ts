@@ -22,7 +22,7 @@ import {
 } from '@matra/crypto';
 import type { CounselorMatchGroup, ReportReleaseBundle, SurvivorReportRequest } from '@matra/shared';
 import { getDb } from './app.js';
-import { createRecord, makeMatchingApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
+import { createRecord, releaseConsent, makeMatchingApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
 
 const groupsOf = async (app: express.Express, c: TestUser) => {
   const r = await request(app).get('/api/counselor/groups').set(c.auth);
@@ -85,7 +85,7 @@ async function consent(app: express.Express, s: TestUser, req: SurvivorReportReq
       recordId,
       recipientWrappedKey: await wrapKeyForRecipient(recordKey, req.counselor.publicKey),
       blobs: await Promise.all(blobs.map(async (b) => ({ blobId: b.blobId, recipientWrappedKey: await wrapKeyForRecipient(b.key, req.counselor.publicKey) }))),
-      consentStatement: `I share my report with this counselor only (key ${fp}).`,
+      consentStatement: releaseConsent(fp, blobs.length),
       counselorKeyFingerprint: fp,
     });
 }
@@ -229,7 +229,7 @@ describe('stage 2: report requests and her decision', () => {
       recordId: recA.res.body.record.id,
       recipientWrappedKey: await wrapKeyForRecipient(recA.key, req!.counselor.publicKey),
       blobs: [],
-      consentStatement: `I share with key ${fp}.`,
+      consentStatement: releaseConsent(fp, 0),
       counselorKeyFingerprint: fp,
       ...over,
     });
@@ -237,6 +237,12 @@ describe('stage 2: report requests and her decision', () => {
     const wrongFp = fp.replace(/^./, fp[0] === 'A' ? 'B' : 'A');
     expect((await send({ counselorKeyFingerprint: wrongFp, consentStatement: `key ${wrongFp} ok` })).body.code).toBe('counselor_key_mismatch');
     expect((await send({ consentStatement: 'I share my report, without naming any key.' })).body.code).toBe('consent_fingerprint_missing');
+    // her consent must say what the counselor can open: the written account, and exactly the files wrapped (@matra/shared consent.ts)
+    const aBlob = await uploadBlob(app, a);
+    const oneFile = [{ blobId: aBlob.res.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(aBlob.key, req!.counselor.publicKey) }];
+    expect((await send({ consentStatement: `I share with key ${fp}.` })).body.code).toBe('consent_mismatch');
+    expect((await send({ blobs: oneFile })).body.code).toBe('consent_mismatch'); // says no files, wraps one
+    expect((await send({ consentStatement: releaseConsent(fp, 1) })).body.code).toBe('consent_mismatch'); // says one, wraps none
     expect((await send({ recordId: recB.res.body.record.id })).status).toBe(403);
     const bBlob = await uploadBlob(app, b);
     expect((await send({ blobs: [{ blobId: bBlob.res.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(bBlob.key, req!.counselor.publicKey) }] })).status).toBe(403);

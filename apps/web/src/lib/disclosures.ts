@@ -8,7 +8,7 @@
  * Never say "subpoena-proof", "bulletproof", "admissible" or "tamper-proof".
  */
 
-import type { DraftMode } from '@matra/shared';
+import { sharedFilesSentence, writtenAccountSentence, type DraftMode } from '@matra/shared';
 
 export interface Notice {
   id: string;
@@ -179,11 +179,19 @@ export const REPORT_REQUEST_LINES: readonly string[] = [
   'If you say no, the counselor only learns that you decided not to share. You never have to give a reason, and you won’t be asked again through Matra about this sealed match.',
 ];
 
-/** The exact consent text stored with a report release (and hashed into its ledger entry). */
+/** What the counselor's app does with her account (it shows the summary; it has no PDF download). */
+export const COUNSELOR_SUMMARY_LINE = 'Their app shows your written account laid out as an incident summary.';
+
+/**
+ * The exact consent text stored with a report release (and hashed into its ledger entry). Like the attorney share's,
+ * it is plain text on the server, so it says what is shared in fixed words (@matra/shared consent.ts) and never anything
+ * from her account; the server checks the account and file sentences against what is wrapped.
+ */
 export function buildReportConsentStatement(p: {
   counselor: { displayName: string; organization?: string };
   fingerprint: string;
-  withEvidence: number;
+  /** how many evidence files themselves she ticked */
+  files: number;
   sealedAt: string;
   expiresInDays: number;
   at: string;
@@ -191,7 +199,9 @@ export function buildReportConsentStatement(p: {
   const who = `${p.counselor.displayName}${p.counselor.organization ? ` of ${p.counselor.organization}` : ''}`;
   return [
     `I choose to share my sealed Matra account (sealed ${p.sealedAt}) with ${who}, the legal options counselor who asked for it, and with no one else.`,
-    p.withEvidence > 0 ? `I am also sharing ${p.withEvidence} evidence file${p.withEvidence === 1 ? '' : 's'} I chose.` : 'I am not sharing any evidence files.',
+    writtenAccountSentence(),
+    'Their app shows my written account laid out as an incident summary.',
+    sharedFilesSentence(p.files),
     `It is encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
     'It is not shared with anyone else who named the same person.',
     `Access ends after ${p.expiresInDays} days unless I stop it sooner. Stopping ends future access, but it can’t take back what was already read.`,

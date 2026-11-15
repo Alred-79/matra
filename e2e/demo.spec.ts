@@ -360,8 +360,17 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   await shot(page, '10-attorney-directory', { mobile: false });
   await card.getByRole('button', { name: 'Review and decide' }).click();
   await expect(page.getByRole('heading', { name: `Share with ${ATTORNEY_NAME}?` })).toBeVisible();
-  await expect(page.getByLabel(/My evidence files/)).toBeChecked();
-  await expect(page.locator('.consent-text')).toContainText(`I, "${ALIAS_A}", choose to share`);
+  // Her written account is always shared (it says what it holds); each file is shared only if she ticks it.
+  await expect(page.getByTestId('account-parts')).toContainText('the list of all your evidence files');
+  await expect(page.getByLabel(/hallway\.jpg/)).not.toBeChecked();
+  await expect(page.locator('.consent-text')).toContainText('I am not sharing any of the evidence files themselves.');
+  await page.getByRole('button', { name: 'Tick all 2 files' }).click();
+  await expect(page.locator('.consent-text')).toContainText('I am also sharing 2 of the evidence files themselves, the ones I chose.');
+  // a made-up label for this share, never her username
+  const label = (await page.getByTestId('share-alias').locator('strong').innerText()).replace(/[“”]/g, '');
+  expect(label).toMatch(/^Client [BCDFGHJKLMNPQRSTVWXZ2-9]{5}$/);
+  await expect(page.locator('.consent-text')).toContainText(`Matra shows this share to them as "${label}"`);
+  await expect(page.locator('.consent-text')).not.toContainText(ALIAS_A);
   await expect(page.locator('.consent-text')).toContainText('The attorney can read and save what I share.');
   await expect(page.getByTestId('notice-sharing')).toContainText('it can’t erase what they already saved');
   // No manual fingerprint step: this dev build pins no org key, and says so; the fingerprint is an optional, closed detail
@@ -379,7 +388,8 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   // Attorney
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
-  await expect(page.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: label })).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('main')).not.toContainText(ALIAS_A);
   // The verification panel: checked in the browser, in plain language
   const checks = page.getByTestId('case-checks');
   await expect(page.getByTestId('case-verification').getByText('Verified ✓')).toBeVisible();
@@ -455,6 +465,7 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
   await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
+  await page.getByLabel(/hallway\.jpg/).check();
   await page.getByLabel('I agree to the statement above.').check();
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });
@@ -467,7 +478,7 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   att.on('pageerror', (e) => attProblems.push(e.message));
   await signIn(att, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await att.getByRole('link', { name: 'Open' }).first().click();
-  await expect(att.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
+  await expect(att.getByRole('heading', { name: /^Client [BCDFGHJKLMNPQRSTVWXZ2-9]{5}$/ })).toBeVisible({ timeout: 60_000 });
 
   // Survivor revokes
   await nav(page, 'Home');
@@ -546,7 +557,7 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   // The attorney no longer learns anything about sealed matches.
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
-  await expect(page.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: /^Client [BCDFGHJKLMNPQRSTVWXZ2-9]{5}$/ })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole('heading', { name: /Sealed escrow|independent match/i })).toHaveCount(0);
   await expect(page.locator('main')).not.toContainText(/independent(ly)? (match|named)/i);
   await page.getByTestId('lock-signout').click();
@@ -612,7 +623,8 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await card.getByRole('link', { name: 'See the request' }).click();
   await expect(page.getByTestId('report-request-title')).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('main')).not.toContainText(ALIAS_B);
-  await expect(page.getByLabel(/My evidence files too/)).not.toBeChecked();
+  await expect(page.getByLabel(/hallway\.jpg/)).not.toBeChecked();
+  await expect(page.locator('.consent-text')).toContainText('My written account is always shared.');
   await expect(page.locator('.consent-text')).toContainText('It is not shared with anyone else who named the same person.');
   const yes = page.getByRole('button', { name: 'Yes, share my report' });
   await expect(yes).toBeDisabled();

@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { checkAttorneyKey, wrapKeyForRecipient, type AttorneyKeyCheck } from '@matra/crypto';
 import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
+import { newShareAlias, shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
+import { ShareContents } from '../components/ShareContents';
 import { VaultStopped } from '../components/UnreadableNote';
 import { NOTICES } from '../lib/disclosures';
 import { shareLengthSentence } from '../lib/shareTerms';
@@ -12,28 +14,36 @@ import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadSpace, type 
 import { MATCH_PINS, attorneyShareable } from '../matchPins';
 
 type Scope = ShareT['scope'][number];
-const SCOPE_LABEL: Record<Scope, string> = {
-  record: 'My written account',
-  evidence: 'My evidence files',
-  brief: 'The incident summary in my own words, prepared from my account',
-};
+
+/** What the attorney's app does with her account: the summary is laid out from it, so it is never a separate choice. */
+export const ATTORNEY_SUMMARY_LINE = 'Their app can lay your written account out as an incident summary, which they can download as a PDF.';
+const ATTORNEY_SUMMARY_SENTENCE = 'Their app can lay my written account out as an incident summary, which they can download as a PDF.';
 
 export const SHARE_DISCLAIMER =
   'This does not report anything to police. The attorney can read and save what you share. You can revoke access at any time. Access also ends on its own on the expiry date, unless you renew it. Revoking or expiry stops future access, but it can’t erase what was already viewed or saved.';
 
+/**
+ * Her consent, word for word. It is stored as plain text on the server and hashed into the ledger, so it names what is
+ * shared in fixed words (@matra/shared consent.ts) and never anything from her account: not her name, not a file name.
+ */
 export function buildConsentStatement(p: {
+  /** the share's made-up label (newShareAlias) */
   alias: string;
   attorney: AttorneyProfile;
   fingerprint: string;
-  scope: Scope[];
+  /** how many evidence files themselves she ticked */
+  files: number;
   sealedAt: string;
   at: string;
   expiresInDays: number;
 }): string {
   const who = `${p.attorney.displayName}${p.attorney.organization ? ` of ${p.attorney.organization}` : ''}`;
   return [
-    `I, "${p.alias}", choose to share my sealed Matra file (sealed ${p.sealedAt}) with ${who}, a verified attorney, so that they can advise me.`,
-    `I am sharing: ${p.scope.map((s) => SCOPE_LABEL[s].replace(/^My /, 'my ').replace(/^The /, 'the ')).join('; ')}.`,
+    `I choose to share my sealed Matra file (sealed ${p.sealedAt}) with ${who}, a verified attorney, so that they can advise me.`,
+    shareAliasSentence(p.alias),
+    writtenAccountSentence(),
+    ATTORNEY_SUMMARY_SENTENCE,
+    sharedFilesSentence(p.files),
     `It will be encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
     shareLengthSentence(p.expiresInDays),
     SHARE_DISCLAIMER.replace(/\bYou\b/g, 'I').replace(/\byou\b/g, 'I'),
@@ -86,7 +96,8 @@ function AttorneyCard({ a, check, onChoose }: { a: AttorneyProfile; check: Attor
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0 }}>{shown.displayName}</h3>
             {check.status === 'verified' && <span className="badge ok">Verified by Matra</span>}
-            {check.status === 'unpinned' && canShare(check) && <span className="badge ok">Verified attorney</span>}
+            {/* a development build has nothing to check the key against, so it claims nothing */}
+            {check.status === 'unpinned' && canShare(check) && <span className="badge neutral">Not checked (development version)</span>}
             {!canShare(check) && <span className="badge warn">Can’t confirm right now</span>}
           </div>
           {shown.organization && <p style={{ margin: 0 }}>{shown.organization}</p>}
@@ -243,21 +254,27 @@ function Consent({
   // Only a sealed version that holds nothing but her account is shared (one sealed before draft slots also holds her
   // working notes): the attorney receives the whole envelope.
   const legacy = !isCleanFinal(record.payload);
-  const evidence = (record.payload.record?.evidence ?? []).filter((e) => e.blobId);
-  const [scope, setScope] = useState<Record<Scope, boolean>>({ record: true, evidence: evidence.length > 0, brief: true });
+  const listed = record.payload.record?.evidence ?? [];
+  const evidence = listed.filter((e) => e.blobId);
+  // no file is shared until she ticks it
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set());
+  const files = evidence.filter((e) => chosen.has(e.blobId!));
+  // made up on this device for this share only: never her username, and two shares can't be linked by it
+  const [alias] = useState(newShareAlias);
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expiresInDays, setExpiresInDays] = useState(90);
   const [at] = useState(() => new Date().toISOString());
 
-  const scopeList = (Object.keys(scope) as Scope[]).filter((s) => scope[s]);
+  // what the server stores as her scope: the account always, files only when she ticked some (it checks both)
+  const scopeList: Scope[] = files.length ? ['record', 'evidence'] : ['record'];
   const statement = fp
     ? buildConsentStatement({
-        alias: session.user.username,
+        alias,
         attorney,
         fingerprint: fp,
-        scope: scopeList,
+        files: files.length,
         sealedAt: record.ledgerEntry?.timestamp ?? record.meta.createdAt,
         at,
         expiresInDays,
@@ -271,12 +288,13 @@ function Consent({
     try {
       const recipientWrappedKey = await wrapKeyForRecipient(record.key, attorney.publicKey);
       const blobs: { blobId: string; recipientWrappedKey: Awaited<ReturnType<typeof wrapKeyForRecipient>> }[] = [];
-      if (scope.evidence && evidence.length) {
+      if (files.length) {
         const { blobs: metas } = await api.listBlobs();
         const byId = new Map(metas.map((m) => [m.id, m]));
-        for (const e of evidence) {
+        for (const e of files) {
           const meta = byId.get(e.blobId!);
-          if (!meta) continue;
+          // her consent names how many files: never share fewer (or more) than it says
+          if (!meta) throw new Error('One of the files you ticked isn’t in your space any more. Nothing was shared.');
           const key = await blobKeyFor(meta, session.masterKey);
           blobs.push({ blobId: meta.id, recipientWrappedKey: await wrapKeyForRecipient(key, attorney.publicKey) });
         }
@@ -289,7 +307,7 @@ function Consent({
         blobs,
         consentStatement: statement,
         scope: scopeList,
-        survivorAlias: session.user.username,
+        survivorAlias: alias,
         expiresInDays,
       });
       onDone(new Date().toISOString());
@@ -333,32 +351,18 @@ function Consent({
         )}
         <CheckItYourself check={check} />
       </section>
-      <fieldset className="card stack">
-        <legend>
-          <h2 style={{ margin: 0 }}>What would you like to share?</h2>
-        </legend>
-        <label className="check">
-          <input type="checkbox" checked disabled />
-          <span>
-            {SCOPE_LABEL.record} <span className="small muted">(needed for any sharing)</span>
-          </span>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={scope.evidence}
-            disabled={!evidence.length}
-            onChange={(e) => setScope({ ...scope, evidence: e.target.checked })}
-          />
-          <span>
-            {SCOPE_LABEL.evidence} <span className="small muted">({evidence.length} file{evidence.length === 1 ? '' : 's'})</span>
-          </span>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={scope.brief} onChange={(e) => setScope({ ...scope, brief: e.target.checked })} />
-          <span>{SCOPE_LABEL.brief}</span>
-        </label>
-      </fieldset>
+      <ShareContents
+        recipient="the attorney"
+        summaryLine={ATTORNEY_SUMMARY_LINE}
+        files={evidence}
+        listed={listed.length}
+        chosen={chosen}
+        onChange={setChosen}
+      />
+      <p className="card soft small" style={{ margin: 0 }} data-testid="share-alias">
+        In their list, this share is called <strong>“{alias}”</strong>. We made up that name for this share only. It isn’t
+        your username, and your other shares get different names.
+      </p>
       <label className="card field">
         <span>How long should they have access?</span>
         <select value={expiresInDays} onChange={(e) => setExpiresInDays(Number(e.target.value))}>

@@ -28,7 +28,7 @@ A working MVP with fictional data. Not audited. **No real survivor data** until 
 ## Discovery, subpoenas, privilege
 
 **6. Can defense counsel subpoena her Matra records?**
-- **From Matra:** we can produce **ciphertext and metadata only**: that an account exists, timestamps, record counts and sizes, share relationships, the plaintext alias shown to the attorney, server-side escrow status, audit log, and IP addresses in server logs. Metadata is not nothing (Memo §2).
+- **From Matra:** we can produce **ciphertext and metadata only**: that an account exists, timestamps, record counts and sizes, share relationships, the plaintext share label shown to the attorney (made up per share, not her username), server-side escrow status, audit log, and IP addresses in server logs. Metadata is not nothing (Memo §2).
 - **From her:** yes, she can be compelled to produce records in her possession, custody, or control, subject to a motion to quash (R. 1:9-2; Fed. R. Crim. P. 17(c), including 17(c)(3) for victim information). Encryption is not a privilege.
 - **From the prosecutor:** anything she gives police is discoverable under R. 3:13-3, and inconsistencies are *Brady*/*Giglio* material.
 - Whether NJ courts would apply a heightened standard (like *State v. Chambers* (2023) / *State v. R.F.P.* (2026) for privileged mental-health records) to **non-privileged** victim writings is an open question we want counsel's view on. Our working assumption is that the bar would likely be lower. **[VERIFY]**

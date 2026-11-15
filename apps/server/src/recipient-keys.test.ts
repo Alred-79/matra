@@ -13,7 +13,7 @@ import { decryptBlob, decryptJSON, publicKeyFingerprint, unwrapKeyWithPrivate, w
 import { getDb } from './app.js';
 import { openDb } from './db.js';
 import { WRAP_GRACE_DAYS, sweepRecipientKeys } from './recipient-keys.js';
-import { createRecord, makeApp, makeMatchingApp, registerUser, uploadBlob, type TestUser } from './test-helpers.js';
+import { TEST_ALIAS, createRecord, shareConsent, makeApp, makeMatchingApp, registerUser, uploadBlob, type TestUser } from './test-helpers.js';
 
 const DAY = 86_400_000;
 const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
@@ -40,10 +40,10 @@ async function shared(dbPath?: string) {
       attorneyId: atty.user.id,
       recipientWrappedKey: await wrapKeyForRecipient(rec.key, atty.user.publicKey),
       blobs: [{ blobId: file.res.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(file.key, atty.user.publicKey) }],
-      consentStatement: `I consent to share my case file with this attorney. Key ${FP}.`,
+      consentStatement: shareConsent(FP, 1),
       attorneyKeyFingerprint: FP,
       scope: ['record', 'evidence'],
-      survivorAlias: 'J.',
+      survivorAlias: TEST_ALIAS,
     });
   expect(res.status).toBe(201);
   return { app, db, jane, atty, rec, file, other, share: res.body.share as { id: string } };
@@ -217,7 +217,7 @@ describe('migration v13', () => {
         .set(jane.auth)
         .send({
           recordId: rec.res.body.record.id, attorneyId: atty.user.id, recipientWrappedKey: await wrapKeyForRecipient(rec.key, atty.user.publicKey),
-          blobs: [], consentStatement: `Share again. Key ${FP}.`, attorneyKeyFingerprint: FP, scope: ['record'], survivorAlias: 'J.',
+          blobs: [], consentStatement: shareConsent(FP, 0), attorneyKeyFingerprint: FP, scope: ['record'], survivorAlias: TEST_ALIAS,
         });
       db.prepare(`UPDATE shares SET status = 'revoked', revoked_at = ? WHERE id = ?`).run(new Date().toISOString(), second.body.share.id);
       // back to the v12 shape: NOT NULL wrap columns

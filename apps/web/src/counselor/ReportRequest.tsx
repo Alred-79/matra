@@ -2,7 +2,8 @@
  * Staged release, Stage 2, her side (docs/design/WEEKEND_MVP.md §3.6; Q-052 intent). The legal options counselor who
  * contacted her has asked to see her full report. She decides alone, in her own time:
  *   - who is asking (name, organization, licensed attorney, key fingerprint);
- *   - exactly what would be shared: her latest sealed account, and evidence only if she ticks it (unticked by default);
+ *   - exactly what would be shared: her latest sealed account, whole (components/ShareContents.tsx lists what it holds),
+ *     and only the evidence files she ticks, one by one (none by default);
  *   - the consent statement, word for word (lib/disclosures.ts), stored with her yes and hashed into the ledger;
  *   - two equally weighted buttons, "Yes, share my report" and "No, don’t share" (leaving the page is "not now"), and after a yes, "Stop sharing".
  * On a yes her record key (and the evidence keys she chose) are wrapped to the counselor's RSA key ON THIS DEVICE, as
@@ -15,8 +16,9 @@ import { Link, useParams } from 'react-router-dom';
 import { fromBase64, publicKeyFingerprint, verifyCounselorRoster, wrapKeyForRecipient } from '@matra/crypto';
 import type { ReportRevokeReason, SurvivorReportRequest, WrappedKey } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
+import { ShareContents } from '../components/ShareContents';
 import { VaultStopped } from '../components/UnreadableNote';
-import { REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
+import { COUNSELOR_SUMMARY_LINE, REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
 import { friendlyError } from '../lib/session';
 import { LEGACY_FINAL_NOTICE, blobKeyFor, finals, isCleanFinal, loadSpace } from '../lib/vault';
 import { MATCH_PINS } from '../matchPins';
@@ -62,7 +64,8 @@ export function ReportRequest() {
     // envelope: it is never released (`legacy`).
     return { req, fingerprint, vouched, label, current, legacy: !!current && !isCleanFinal(current.payload) };
   }, [api, id, session.masterKey]);
-  const [withEvidence, setWithEvidence] = useState(false);
+  // no file is released until she ticks it
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set());
   const [fpConfirmed, setFpConfirmed] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -71,13 +74,15 @@ export function ReportRequest() {
 
   const d = data.data;
   const req = d?.req;
-  const evidence = (d?.current?.payload.record?.evidence ?? []).filter((e) => e.blobId);
+  const listed = d?.current?.payload.record?.evidence ?? [];
+  const evidence = listed.filter((e) => e.blobId);
+  const files = evidence.filter((e) => chosen.has(e.blobId!));
   const statement =
     d && req && d.current
       ? buildReportConsentStatement({
           counselor: req.counselor,
           fingerprint: d.fingerprint,
-          withEvidence: withEvidence ? evidence.length : 0,
+          files: files.length,
           sealedAt: d.current.ledgerEntry?.timestamp ?? d.current.meta.createdAt,
           expiresInDays: DAYS,
           at,
@@ -101,12 +106,13 @@ export function ReportRequest() {
     if (!d || !req || !d.current || !keyOk || !agreed || d.legacy) return;
     const record = d.current;
     const blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }> = [];
-    if (withEvidence && evidence.length) {
+    if (files.length) {
       const { blobs: metas } = await api.listBlobs();
       const byId = new Map(metas.map((m) => [m.id, m]));
-      for (const e of evidence) {
+      for (const e of files) {
         const meta = byId.get(e.blobId!);
-        if (!meta) continue;
+        // her consent names how many files: never release fewer (or more) than it says
+        if (!meta) throw new Error('One of the files you ticked isn’t in your space any more. Nothing was shared.');
         blobs.push({ blobId: meta.id, recipientWrappedKey: await wrapKeyForRecipient(await blobKeyFor(meta, session.masterKey), req.counselor.publicKey) });
       }
     }
@@ -227,23 +233,17 @@ export function ReportRequest() {
                 </div>
               ) : (
                 <>
-                  <fieldset className="card stack">
-                    <legend>
-                      <h2 style={{ margin: 0 }}>What would be shared</h2>
-                    </legend>
-                    <label className="check">
-                      <input type="checkbox" checked disabled />
-                      <span>
-                        My sealed account (sealed {formatDate(d.current.ledgerEntry?.timestamp ?? d.current.meta.createdAt)})
-                      </span>
-                    </label>
-                    <label className="check">
-                      <input type="checkbox" checked={withEvidence} disabled={!evidence.length} onChange={(e) => setWithEvidence(e.target.checked)} />
-                      <span>
-                        My evidence files too <span className="small muted">({evidence.length} file{evidence.length === 1 ? '' : 's'}, optional)</span>
-                      </span>
-                    </label>
-                  </fieldset>
+                  <p className="small muted" style={{ margin: 0 }}>
+                    Your newest sealed version would be shared (sealed {formatDate(d.current.ledgerEntry?.timestamp ?? d.current.meta.createdAt)}).
+                  </p>
+                  <ShareContents
+                    recipient="the counselor"
+                    summaryLine={COUNSELOR_SUMMARY_LINE}
+                    files={evidence}
+                    listed={listed.length}
+                    chosen={chosen}
+                    onChange={setChosen}
+                  />
                   <section className="card stack" aria-labelledby="rq-key">
                     <h2 id="rq-key">Their key</h2>
                     <p className="fingerprint fingerprint-big card warm">{d.fingerprint}</p>

@@ -5,7 +5,7 @@
  * wrapped keys, public keys, and hashes. Request bodies are never logged.
  *
  * Error shape: ApiError `{ error: string, code?: string }`. Codes used:
- *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch
+ *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch | consent_mismatch
  *   401 unauthorized | session_expired | invalid_credentials
  *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified | counselor_not_verified
  *       | age_not_confirmed | phone_not_verified | release_revoked | release_expired
@@ -68,7 +68,7 @@ import type {
   VaultRecordMeta,
   WrappedKey,
 } from '@matra/shared';
-import { SLOT_MAX_PER_ACCOUNT, type DraftMode, type GetSlotResponse, type PutSlotResponse } from '@matra/shared';
+import { SLOT_MAX_PER_ACCOUNT, consentMatches, type DraftMode, type GetSlotResponse, type PutSlotResponse } from '@matra/shared';
 import { deploymentId, openDb, type DB } from './db.js';
 import { SlotStore, draftsDbPathFor } from './slots.js';
 import {
@@ -426,6 +426,7 @@ const toShare = (s: ShareRow): Share => ({
   status: s.status,
   consentStatement: s.consent_statement,
   scope: JSON.parse(s.scope),
+  survivorAlias: s.survivor_alias,
   createdAt: s.created_at,
   expiresAt: s.expires_at,
   ...(s.revoked_at != null && { revokedAt: s.revoked_at }),
@@ -1317,8 +1318,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (!meta) throw new HttpError(404, 'blob_not_found', 'One of the files was not found.');
       if (meta.owner_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only share your own files.');
     }
+    // The scope she agreed to must be what is wrapped (@matra/shared consent.ts): her written account always (its key
+    // is the one wrapped), 'evidence' exactly when files are, and no separate 'brief': the incident summary is laid out
+    // from the written account, so it can't be left out of a share that has the account.
+    if (!body.scope.includes('record'))
+      throw new HttpError(400, 'scope_mismatch', "The written account is always shared, so the consent scope must include 'record'.");
+    if (body.scope.includes('brief'))
+      throw new HttpError(400, 'scope_mismatch', "The incident summary is laid out from the written account; it isn't a separate choice.");
     if (body.blobs.length > 0 && !body.scope.includes('evidence'))
       throw new HttpError(400, 'scope_mismatch', "Sharing files requires 'evidence' in the consent scope.");
+    if (body.blobs.length === 0 && body.scope.includes('evidence'))
+      throw new HttpError(400, 'scope_mismatch', "The consent scope names evidence files, but no file was shared.");
+    if (!consentMatches(body.consentStatement, { files: body.blobs.length, alias: body.survivorAlias }))
+      throw new HttpError(
+        400,
+        'consent_mismatch',
+        'The consent statement must say that the written account is shared, how many files are shared, and the label the attorney sees.',
+      );
 
     const id = newId();
     const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
@@ -2516,6 +2532,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(409, 'counselor_key_mismatch', "The counselor's key does not match the one you confirmed. Nothing was shared.");
     if (!body.consentStatement.includes(fp))
       throw new HttpError(400, 'consent_fingerprint_missing', 'The consent statement must name the confirmed key fingerprint.');
+    // Her consent must say what the counselor can open: the written account, and exactly this many files.
+    if (!consentMatches(body.consentStatement, { files: body.blobs.length }))
+      throw new HttpError(400, 'consent_mismatch', 'The consent statement must say that the written account is shared and how many files are shared.');
     const id = newId();
     const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
     const blobIds = body.blobs.map((b) => b.blobId);

@@ -11,8 +11,14 @@ import { MATCH_PINS } from '../matchPins';
 import { CheckLines } from '../verify/CheckLines';
 import { accountCheck, chainCheck, evidenceCheck, overallTone, proofHashes, sealedEntry, type CheckLine } from '../verify/checks';
 
+// 'brief' only on shares made before the summary stopped being a separate choice (it is laid out from the account)
 const SCOPE_WORDS: Record<string, string> = { record: 'Written account', evidence: 'Evidence files', brief: 'Incident summary' };
 const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(' · ');
+
+/** The share's label as a file-name part ("Client K7QZ4" → "client-k7qz4"); never anything from her account. */
+export function aliasSlug(alias: string): string {
+  return alias.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'client';
+}
 
 export function AttorneyCases() {
   const { api, session, refreshProfile } = useRequiredSession();
@@ -121,7 +127,7 @@ export function AttorneyCases() {
           {active.map((s) => (
             <li key={s.id} className="row" style={{ justifyContent: 'space-between' }}>
               <span style={{ minWidth: 0 }}>
-                <strong>Shared file</strong>
+                <strong>{s.survivorAlias ?? 'Shared file'}</strong>
                 <br />
                 <span className="small muted">
                   Shared {formatDate(s.createdAt)} · access until {formatDate(s.expiresAt)} · {scopeText(s.scope)}
@@ -221,7 +227,7 @@ export function AttorneyCase() {
         generatedAt: new Date(),
         preparedFor: session.attorneyProfile?.displayName,
       });
-      downloadPdf(pdf, `matra-incident-summary-${bundle.survivorAlias}-${new Date().toISOString().slice(0, 10)}.pdf`);
+      downloadPdf(pdf, `matra-incident-summary-${aliasSlug(bundle.survivorAlias)}-${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) {
       setBriefError(friendlyError(e));
     } finally {
@@ -238,7 +244,8 @@ export function AttorneyCase() {
       {opened.error && <ErrorNote>{opened.error}</ErrorNote>}
       {opened.data && (
         <>
-          <PageTitle eyebrow="Shared file">Client: {opened.data.bundle.survivorAlias}</PageTitle>
+          {/* the share's label, made up on her device for this share only (never her username) */}
+          <PageTitle eyebrow="Shared file">{opened.data.bundle.survivorAlias}</PageTitle>
           <dl className="case-meta">
             <div>
               <dt>Shared</dt>

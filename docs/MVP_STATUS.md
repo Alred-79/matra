@@ -120,7 +120,7 @@ Short items that you or a contributor can do now, in rough priority order:
 
 1. Attorney MFA or passkeys and a logged verification workflow (W7, N7).
 2. Argon2id via WASM (W5; the strength floor is built).
-3. Metadata minimization, the rest of W11: size padding for records and blobs, encrypted share alias (IPs and request logs are done).
+3. Metadata minimization, the rest of W11: size padding for records and blobs (IPs and request logs are done; the share alias is now a random per-share label, so encrypting it is no longer needed to hide her username).
 4. Published build hashes and an SRI manifest (W4).
 5. ~~More crypto unit tests.~~ *Mostly done on weekend-mvp:* `packages/crypto` has 191 tests (tamper, wrong key, threshold t−1, attestation, recovery). Still worth adding: key-wrap round trips and fingerprint stability for the original vault code. Auditors price by uncertainty.
 6. Attorney-first route (N1) and the private-draft vs sealed-statement split (N5). These are the two things lawyers are most likely to ask for. *N5 in part on `p1/vault-foundation`:* her draft is one encrypted draft slot, saved over as she writes with no ledger entry, and a sealed version holds only her account (`MATRA_DRAFT_MODE`, default `slot`; the launch default is for counsel, Q-004).

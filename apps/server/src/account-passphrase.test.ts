@@ -24,7 +24,7 @@ import {
 } from '@matra/crypto';
 import type { Envelope, PublicUser } from '@matra/shared';
 import { getDb } from './app.js';
-import { createRecord, makeApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
+import { TEST_ALIAS, createRecord, shareConsent, makeApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
 
 // Run something while the server hashes the new auth key (the conditional-update race).
 const hook = vi.hoisted(() => ({ duringHash: null as null | (() => Promise<void>), duringVerify: null as null | (() => Promise<void>) }));
@@ -116,10 +116,10 @@ describe('POST /api/account/passphrase', () => {
         attorneyId: atty.user.id,
         recipientWrappedKey: await wrapKeyForRecipient(recKey, pub),
         blobs: [],
-        consentStatement: `I consent to share my case file with this attorney for legal consultation. Key ${fp}.`,
+        consentStatement: shareConsent(fp, 0),
         attorneyKeyFingerprint: fp,
         scope: ['record'],
-        survivorAlias: 'J.',
+        survivorAlias: TEST_ALIAS,
       });
     expect(share.status).toBe(201);
 

@@ -79,7 +79,7 @@ Changing her passphrase, or "sign out everywhere else", deletes her other rows a
 | record_id, survivor_id, attorney_id, scope | what she shared with whom | account (either side) |
 | recipient_wrapped_key | content key (and each shared file's) wrapped to the attorney's public key | until access ends: deleted (set to NULL) in the same transaction as her revoke, or by housekeeping 30 days after the share expired; a renewal after that stores a fresh one from her device (`src/recipient-keys.ts`). Backups made before keep it |
 | consent_statement | the consent text she agreed to (also hashed into the ledger) | account |
-| survivor_alias | the name she chose to show the attorney | account |
+| survivor_alias | the share's label shown to the attorney ("Client" + 5 random characters, made up on her device for that share only; never her username). Shares made before 2026-11-15 may hold her username | account |
 | status, created_at, expires_at, revoked_at, ledger_entry_id | access control and her audit view | account |
 
 ### ledger (append-only)

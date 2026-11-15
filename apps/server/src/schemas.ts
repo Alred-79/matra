@@ -1,6 +1,6 @@
 /** zod validators for every request the API accepts. Unknown keys are stripped. */
 import { z } from 'zod';
-import { SLOT_BUCKET_BYTES, SLOT_MAX_BYTES, SLOT_NAME_RE } from '@matra/shared';
+import { SHARE_ALIAS_RE, SLOT_BUCKET_BYTES, SLOT_MAX_BYTES, SLOT_NAME_RE } from '@matra/shared';
 
 const B64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
@@ -182,12 +182,14 @@ export const createShareRequest = z.object({
     .max(500)
     .refine((b) => new Set(b.map((x) => x.blobId)).size === b.length, 'duplicate blobId'),
   consentStatement: z.string().trim().min(10).max(10_000),
+  // 'brief' is still parsed so the route can say why it is refused (old shares stored it; see app.ts)
   scope: z
     .array(z.enum(['record', 'evidence', 'brief']))
     .min(1)
     .max(3)
     .refine((s) => new Set(s).size === s.length, 'duplicate scope'),
-  survivorAlias: z.string().trim().min(1).max(100),
+  /** A label made up on her device for this share only, never her username (@matra/shared consent.ts). */
+  survivorAlias: z.string().regex(SHARE_ALIAS_RE, 'invalid share label'),
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 

@@ -14,9 +14,21 @@ import {
   wrapKeyWithMaster,
 } from '@matra/crypto';
 import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, MatchStates, RegisterRequest, Role } from '@matra/shared';
+import { shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
 import { createApp, getDb, type CreateAppOptions } from './app.js';
 
 export const TEST_ITERATIONS = 1000;
+
+/** A share label in the form her app makes ("Client XXXXX"). */
+export const TEST_ALIAS = 'Client BCDFG';
+
+/** A consent statement the server accepts for an attorney share of `files` files to the key `fp` (@matra/shared consent.ts). */
+export const shareConsent = (fp: string, files: number, alias = TEST_ALIAS) =>
+  [`I consent to share my case file with this attorney for legal consultation. Key ${fp}.`, shareAliasSentence(alias), writtenAccountSentence(), sharedFilesSentence(files)].join('\n');
+
+/** The same for a report release to a counselor (no label). */
+export const releaseConsent = (fp: string, files: number) =>
+  [`I share my report with this counselor only (key ${fp}).`, writtenAccountSentence(), sharedFilesSentence(files)].join('\n');
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
 type MakeAppOptions = { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; draftsDbPath?: string; inspector?: boolean; minKdfIterations?: number };

@@ -109,7 +109,8 @@ test('pilot 2. she writes, names him with a phone and a handle, seals and shares
   const card = page.locator('li.card', { hasText: ATTORNEY_NAME });
   await expect(card).toBeVisible({ timeout: 60_000 });
   await card.getByRole('button', { name: 'Review and decide' }).click();
-  await expect(page.locator('.consent-text')).toContainText(`I, "${ALIAS}", choose to share`);
+  await expect(page.locator('.consent-text')).toContainText('My written account is always shared.');
+  await expect(page.locator('.consent-text')).not.toContainText(ALIAS); // a made-up label, never her username
   await page.getByLabel('I agree to the statement above.').check();
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });
@@ -366,7 +367,8 @@ test('pilot 3. the attorney opens and verifies what she shared', async ({ page }
   const api = recordApi(page);
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
-  await expect(page.getByRole('heading', { name: `Client: ${ALIAS}` })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: /^Client [BCDFGHJKLMNPQRSTVWXZ2-9]{5}$/ })).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('main')).not.toContainText(ALIAS);
   await expect(page.getByTestId('case-verification').getByText('Verified ✓')).toBeVisible();
   await expect(page.getByTestId('case-checks').locator('[data-check="account"]')).toHaveAttribute('data-tone', 'ok');
   expect(await page.locator('.brief-verbatim-text').allTextContents()).toContain(NARRATIVE);

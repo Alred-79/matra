@@ -358,7 +358,10 @@ export interface Share {
   status: ShareStatus;
   /** Exact consent text the survivor agreed to */
   consentStatement: string;
+  /** 'brief' only on shares made before the incident summary stopped being a separate (and unenforced) choice. */
   scope: Array<'record' | 'evidence' | 'brief'>;
+  /** The label the attorney sees for this share (ShareBundle.survivorAlias); both sides' lists carry it. */
+  survivorAlias?: string;
   createdAt: string;
   /** Access stops at this time (default 90 days); the survivor can renew. Stops future access only. */
   expiresAt: string;
@@ -384,6 +387,7 @@ export interface ShareBundle {
   /** record key wrapped to the attorney's RSA public key */
   recipientWrappedKey: WrappedKey;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey; contentHash: string; sizeBytes: number }>;
+  /** The share's label, made up for it on her device ("Client XXXXX"); a share made before that may hold her username. */
   survivorAlias: string;
   // NOTE: attorneys no longer receive sealed-match counts. Matches go only to a Legal Options Counselor
   // (role 'counselor'), who contacts each matched survivor separately — see CounselorMatchGroup.
@@ -533,6 +537,7 @@ export interface ReportConsentRequest {
   recordId: string;
   recipientWrappedKey: WrappedKey;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+  /** Names the key fingerprint, and says what is shared in the words of consent.ts (else 400 consent_mismatch). */
   consentStatement: string;
   /** fingerprint of the counselor key she confirmed (or that the signed roster vouched for); the server rejects a mismatch */
   counselorKeyFingerprint: string;
@@ -897,8 +902,14 @@ export interface CreateShareRequest {
   /** Fingerprint of the attorney key the survivor confirmed on screen; server rejects on mismatch. */
   attorneyKeyFingerprint: string;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+  /**
+   * Must name the key fingerprint and say what is shared, in the words of consent.ts: the written account sentence,
+   * the sentence for exactly `blobs.length` files, and the label sentence for `survivorAlias` (else 400 consent_mismatch).
+   */
   consentStatement: string;
+  /** 'record', plus 'evidence' exactly when `blobs` is not empty. 'brief' is refused (old shares may still list it). */
   scope: Share['scope'];
+  /** "Client XXXXX" (SHARE_ALIAS_RE), made up on her device for this share only */
   survivorAlias: string;
   /** 1-365, default 90 */
   expiresInDays?: number;
@@ -1044,3 +1055,4 @@ export * from './request-log.js';
 export * from './inspector.js';
 export * from './matching-mode.js';
 export * from './slots.js';
+export * from './consent.js';

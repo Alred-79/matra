@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import request from 'supertest';
 import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
-import { createRecord, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
+import { TEST_ALIAS, createRecord, shareConsent, makeApp, makeMatchingApp, registerUser, sealMatch, uploadBlob } from './test-helpers.js';
 
 describe('account deletion', () => {
   it('deletes all user data but keeps the ledger intact', async () => {
@@ -25,10 +25,10 @@ describe('account deletion', () => {
         attorneyId: atty.user.id,
         recipientWrappedKey: await wrapKeyForRecipient(key, atty.user.publicKey),
         blobs: [{ blobId: blob, recipientWrappedKey: await wrapKeyForRecipient(key, atty.user.publicKey) }],
-        consentStatement: `I consent to share my case file with this attorney. ${await publicKeyFingerprint(atty.user.publicKey)}`,
+        consentStatement: shareConsent(await publicKeyFingerprint(atty.user.publicKey), 1),
           attorneyKeyFingerprint: await publicKeyFingerprint(atty.user.publicKey),
         scope: ['record', 'evidence'],
-        survivorAlias: 'J.',
+        survivorAlias: TEST_ALIAS,
       });
     expect(share.status).toBe(201);
     await registerUser(app, 'loc.test', 'counselor');
