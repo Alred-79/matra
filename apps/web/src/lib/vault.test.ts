@@ -1,10 +1,11 @@
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import type { EvidenceItem, IntakeRecord } from '@matra/shared';
 import { ApiError, type ApiClient } from '../api/client';
 import { draftToRecord, emptyDraft } from '../intake';
 import { DEFAULT_KDF_ITERATIONS, decryptJSON, deriveKeys, newKdfSalt, sealSlot, unwrapKeyWithMaster } from '@matra/crypto';
 import {
   DRAFT_PROBLEM_ID,
+  RETRY_DELAY_MS,
   UnreadableVaultError,
   VAULT_INTEGRITY_STOP,
   VAULT_UNAVAILABLE_STOP,
@@ -37,6 +38,10 @@ const file = (blobId: string): EvidenceItem => ({
 });
 
 describe('loadVault fails closed', () => {
+  // a dropped request is tried once more after this delay (lib/vault.ts retryOnce); no need to wait in tests
+  beforeAll(() => {
+    RETRY_DELAY_MS.value = 0;
+  });
   const draft = (n: number) => ({ answers: { n } }) as unknown as NonNullable<WorkingData['draft']>;
   const final = { kind: 'final', record: { story: 'mine' }, savedAt: '2026-01-01T00:00:00Z' };
   /** three saved versions, each superseding the last (legacy draft records, as every autosave was before slots) */
@@ -51,6 +56,43 @@ describe('loadVault fails closed', () => {
   }
   /** what loadVault throws (or null) */
   const thrown = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+
+  it('one dropped request is tried once more before anything stops; two in a row stop it', async () => {
+    const { masterKey, stored } = await three();
+    const api = vaultApi(stored);
+    const get = api.getRecord.bind(api);
+    let calls = 0;
+    api.getRecord = async (id: string) => {
+      if (id === 'r3' && calls++ === 0) throw new ApiError(0, 'offline', 'network');
+      return get(id);
+    };
+    expect((await loadVault(api, masterKey)).problems).toEqual([]);
+    expect(calls).toBe(2);
+    api.getRecord = async (id: string) => {
+      if (id === 'r3') throw new ApiError(503, 'down');
+      return get(id);
+    };
+    expect(await thrown(loadVault(api, masterKey))).toBeInstanceOf(VaultUnavailableError);
+  });
+
+  it('a 404 or 403 on the list or her draft’s route is "couldn’t reach us" (a proxy or a deploy), never "doesn’t match"', async () => {
+    const { masterKey, stored } = await three();
+    for (const status of [404, 403]) {
+      const api = vaultApi(stored);
+      api.listRecords = async () => {
+        throw new ApiError(status, 'Not Found');
+      };
+      const e = await thrown(loadVault(api, masterKey));
+      expect(e).toBeInstanceOf(VaultUnavailableError);
+      expect((e as VaultUnavailableError).problems).toEqual([{ kind: 'unavailable', id: 'list' }]);
+      const api2 = vaultApi(stored, {
+        slot: async () => {
+          throw new ApiError(status, 'Not Found');
+        },
+      });
+      expect(((await thrown(loadSpace(api2, masterKey))) as VaultUnavailableError).problems).toEqual([{ kind: 'unavailable', id: DRAFT_PROBLEM_ID }]);
+    }
+  });
 
   it('a clean vault opens, every record checked against its stored hash and its ledger entry', async () => {
     const { masterKey, stored } = await three();
@@ -227,6 +269,29 @@ describe('loadSpace: her draft slot counts, and is checked against the records',
     const e = await loadSpace(api, masterKey).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(VaultIntegrityError);
     expect((e as VaultIntegrityError).problems).toEqual([{ kind: 'missing', id: 'f2' }]);
+  });
+
+  it('another tab sealed between the list and the draft read: listed once more, it loads cleanly (no "doesn’t match")', async () => {
+    const { masterKey } = await deriveKeys('vault test passphrase words', newKdfSalt(), 1000);
+    const f1 = await storedRecord(masterKey, { kind: 'final', record: {}, savedAt: 'x' }, { id: 'f1' });
+    const f2 = await storedRecord(masterKey, { kind: 'final', record: {}, savedAt: 'y' }, { id: 'f2', supersedes: 'f1' });
+    const sealed = await sealSlot(slotValue({ sealedRecordId: 'f2' }), masterKey);
+    const stored = [f1];
+    const api = vaultApi(stored, { slot: async () => ({ slot: { ...sealed, version: 'v2', updatedDay: '2026-01-01' }, draftMode: 'slot' }) });
+    const list = api.listRecords.bind(api);
+    let lists = 0;
+    api.listRecords = async () => {
+      // the other tab's seal lands right after this tab's first list
+      if (lists++ === 0) {
+        const first = await list();
+        stored.push(f2);
+        return first;
+      }
+      return list();
+    };
+    const space = await loadSpace(api, masterKey);
+    expect(space.problems).toEqual([]);
+    expect(space.vault.map((r) => r.meta.id)).toEqual(['f2', 'f1']);
   });
 
   it('a slot that doesn’t decrypt, or isn’t a draft, is an integrity problem; one that can’t be fetched is unavailable', async () => {

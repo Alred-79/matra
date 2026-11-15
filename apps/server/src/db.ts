@@ -424,7 +424,8 @@ const MIGRATIONS: string[] = [
   // ── v13: a recipient's copy of a key is deleted when access ends (src/recipient-keys.ts). recipient_wrapped_key in
   // shares, share_blobs, report_releases and report_release_blobs becomes nullable (SQLite can only drop NOT NULL by
   // rebuilding the table): NULL once she revokes, once Matra ends a release, or 30 days after access expired. Rows that
-  // were already revoked lose theirs here. Everything else is copied unchanged.
+  // were already revoked lose theirs here. report_releases.revoke_reason also allows 'matching_off'. Everything else is
+  // copied unchanged.
   `
   CREATE TABLE shares_v13 (
     id                    TEXT PRIMARY KEY,
@@ -475,7 +476,8 @@ const MIGRATIONS: string[] = [
     first_opened_at       TEXT,
     revoked_at            TEXT,
     ledger_entry_id       TEXT NOT NULL,
-    revoke_reason         TEXT CHECK (revoke_reason IN ('survivor','conflict','resealed','withdrawn'))
+    -- 'matching_off': a server running with MATRA_MATCHING=off ended it for her (housekeeping)
+    revoke_reason         TEXT CHECK (revoke_reason IN ('survivor','conflict','resealed','withdrawn','matching_off'))
   );
   INSERT INTO report_releases_v13 (id, request_id, survivor_id, counselor_id, record_id, recipient_wrapped_key, consent_statement,
                                    status, created_at, expires_at, first_opened_at, revoked_at, ledger_entry_id, revoke_reason)

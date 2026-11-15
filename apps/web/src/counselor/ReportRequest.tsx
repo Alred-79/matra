@@ -30,6 +30,7 @@ const ENDED_NOTE: Record<Exclude<ReportRevokeReason, 'survivor'>, string> = {
   conflict: 'They can’t take on this matter. You don’t need to do anything.',
   resealed: 'Your sealed match moved to new matching keys. You don’t need to do anything.',
   withdrawn: 'You withdrew the sealed identifier it was about.',
+  matching_off: 'Sealed matching was turned off, so this access was ended. You don’t need to do anything.',
 };
 
 /** Is this counselor (this exact key) on the organization-signed roster? `null` when the build pins no roster key. */

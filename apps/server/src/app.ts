@@ -1581,6 +1581,28 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // row (its created_at is a sign-in time), no expired challenge (a raw number) and no expired limiter key (the
   // (account, phone token) pair is the very link W19 keeps off disk). Unref'd; errors (a closed test DB) are ignored.
   const memoryLimiters = [smsStartPerAccount, smsStartPerAccountPhone, smsGlobalHour, smsGlobalDay];
+  // MATRA_MATCHING=off: every report-release route is 404 (B1's guard stays), so she can neither see nor end a release
+  // written while matching was on, and the counselor can't open it either. If matching were switched back on, that
+  // access would come back without her doing anything. So Matra ends each live one for her, like a conflict: ledger
+  // row, a line in her activity and the counselor's, and the counselor's copy of the keys deleted. Nothing is deleted.
+  // (Production refuses to start off with such rows at all: matching-off.ts checkLeftoverMatchingRows.)
+  const endReleasesWhileMatchingOff = () => {
+    const live = db.prepare(`SELECT id, survivor_id, counselor_id FROM report_releases WHERE status = 'active'`).all() as Array<{
+      id: string;
+      survivor_id: string;
+      counselor_id: string;
+    }>;
+    for (const rel of live)
+      db.transaction(() => {
+        const at = new Date().toISOString();
+        const reason: ReportRevokeReason = 'matching_off';
+        appendLedger(db, 'report.revoked', rel.id, sha256Hex(JSON.stringify({ releaseId: rel.id, status: 'revoked', reason, revokedAt: at })), at);
+        db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE id = ?`).run(at, reason, rel.id);
+        forgetReleaseKeys(db, rel.id);
+        audit(rel.survivor_id, 'report.revoked', 'Your report is no longer shared with the legal options counselor: sealed matching is turned off on this server, so Matra ended this access. You don’t need to do anything.');
+        audit(rel.counselor_id, 'counselor.release_revoked', 'Your access to a report a survivor shared with you has ended');
+      })();
+  };
   const housekeeping = () => {
     try {
       purgeExpiredSessions(db);
@@ -1588,6 +1610,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       /* DB closed */
     }
     try {
+      if (!mopts) endReleasesWhileMatchingOff();
       // recipients' keys of shares and releases that ended (src/recipient-keys.ts), whether or not matching is on
       sweepRecipientKeys(db);
       // and out of the write-ahead log, also after a release Matra ended for her inside another request
@@ -1842,6 +1865,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     conflict: 'they can’t take on this matter, so Matra ended their access. You don’t need to do anything.',
     resealed: 'your sealed match moved to new matching keys, so Matra ended this access. You don’t need to do anything.',
     withdrawn: 'you withdrew the sealed identifier it was about.',
+    matching_off: 'sealed matching is turned off on this server, so Matra ended this access. You don’t need to do anything.',
   };
   const endRelease = (rel: LiveReleaseRef, reason: Exclude<ReportRevokeReason, 'survivor'>, revokedAt: string) => {
     appendLedger(db, 'report.revoked', rel.id, revokeHash(rel.id, reason, revokedAt), revokedAt);

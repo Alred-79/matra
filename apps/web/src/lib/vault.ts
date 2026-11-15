@@ -211,14 +211,50 @@ export function vaultProblemNotice(problems: VaultProblem[] | undefined): string
 }
 const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 
-/** A failed request, as a problem. A signed-out session (401) isn't one: it is thrown as it is. */
-function requestProblem(e: unknown, id: string): VaultProblem {
+/**
+ * A failed request, as a problem. A signed-out session (401) isn't one: it is thrown as it is. A 404/403 is `missing`
+ * only for a record the server listed (it listed it, then won't serve it). On the list or her draft's route it can't
+ * mean that (the draft route answers 200 with null when she has none), so it is a misrouted proxy or a deploy in
+ * progress: `unavailable`, with the "couldn't reach us" copy.
+ */
+function requestProblem(e: unknown, id: string, listedRecord = false): VaultProblem {
   if (e instanceof ApiError) {
     if (e.status === 401) throw e;
-    // the server listed (or pointed to) it, then won't serve it
-    if (e.status === 404 || e.status === 403) return { kind: 'missing', id };
+    if (listedRecord && (e.status === 404 || e.status === 403)) return { kind: 'missing', id };
   }
   return { kind: 'unavailable', id };
+}
+
+/** Worth one more try: no answer, a server error, rate limiting, or a reply that wasn't ours (a captive portal). */
+function transient(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return true;
+  return e.status === 0 || e.status === 429 || e.status >= 500;
+}
+/** Wait before trying a dropped request again (exported for tests). */
+export const RETRY_DELAY_MS = { value: 400 };
+/** One dropped request on a flaky phone network shouldn't stop a whole screen: try a transient failure once more. */
+async function retryOnce<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (!transient(e)) throw e;
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS.value));
+    return f();
+  }
+}
+/** Run `f` over `items` with at most `limit` in flight (her space can hold hundreds of records). */
+async function mapLimit<T, R>(items: T[], limit: number, f: (t: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const k = next++;
+        out[k] = await f(items[k]!);
+      }
+    }),
+  );
+  return out;
 }
 
 const PAYLOAD_KINDS = new Set(['draft', 'final', 'profile']);
@@ -241,9 +277,9 @@ async function checkRecord(api: ApiClient, masterKey: CryptoKey, listed: VaultRe
   const integrity = (reason: IntegrityReason): VaultProblem => ({ kind: 'integrity', reason, id });
   let record: VaultRecord;
   try {
-    record = (await api.getRecord(id)).record;
+    record = (await retryOnce(() => api.getRecord(id))).record;
   } catch (e) {
-    return requestProblem(e, id);
+    return requestProblem(e, id, true);
   }
   if (!isObject(record) || record.id !== id || !isObject(record.envelope) || !isObject(record.ownerWrappedKey)) return integrity('shape');
   let bytes: Uint8Array;
@@ -266,9 +302,9 @@ async function checkRecord(api: ApiClient, masterKey: CryptoKey, listed: VaultRe
   let ledgerEntry: LedgerEntry | undefined;
   if (withLedger) {
     try {
-      ledgerEntry = (await api.getLedgerEntry(record.ledgerEntryId)).entry;
+      ledgerEntry = (await retryOnce(() => api.getLedgerEntry(record.ledgerEntryId))).entry;
     } catch (e) {
-      const p = requestProblem(e, id);
+      const p = requestProblem(e, id, true);
       return p.kind === 'missing' ? integrity('ledger') : p;
     }
     if (!ledgerEntry || ledgerEntry.contentHash !== recomputed || ledgerEntry.subjectId !== id || ledgerEntry.type !== 'record.sealed')
@@ -320,11 +356,11 @@ export async function loadVault(
 ): Promise<LoadedVault> {
   let records: VaultRecordMeta[];
   try {
-    records = (await api.listRecords()).records;
+    records = (await retryOnce(() => api.listRecords())).records;
   } catch (e) {
     throw vaultError([requestProblem(e, 'list')]);
   }
-  const results = await Promise.all(records.map((r) => checkRecord(api, masterKey, r, withLedger)));
+  const results = await mapLimit(records, 6, (r) => checkRecord(api, masterKey, r, withLedger));
   const problems = results.filter(isProblem);
   // a record names an earlier version the server didn't list (the server checks supersedes is hers when it is saved)
   const ids = new Set(records.map((r) => r.id));
@@ -352,9 +388,13 @@ export interface LoadedSpace {
  * of a sealed version the server didn't list is `missing` (it hid her newest seal).
  */
 export async function loadSpace(api: ApiClient, masterKey: CryptoKey, opts: LoadVaultOptions = {}): Promise<LoadedSpace> {
+  return loadSpaceOnce(api, masterKey, opts, false);
+}
+
+async function loadSpaceOnce(api: ApiClient, masterKey: CryptoKey, opts: LoadVaultOptions, again: boolean): Promise<LoadedSpace> {
   const [vault, slotOrProblem] = await Promise.all([
     loadVault(api, masterKey, { ...opts, allowPartial: true }),
-    loadDraftSlot(api, masterKey).catch((e: unknown) => requestProblem(e, DRAFT_PROBLEM_ID)),
+    retryOnce(() => loadDraftSlot(api, masterKey)).catch((e: unknown) => requestProblem(e, DRAFT_PROBLEM_ID)),
   ]);
   const problems = [...vault.problems];
   let slot: DraftSlotState;
@@ -366,7 +406,15 @@ export async function loadSpace(api: ApiClient, masterKey: CryptoKey, opts: Load
     slot = slotOrProblem as DraftSlotState;
     if (slot.unreadable) problems.push({ kind: 'integrity', reason: slot.unreadableReason ?? 'gcm', id: DRAFT_PROBLEM_ID });
     const sealedId = slot.slot?.value.sealedRecordId;
-    if (sealedId && !vault.listed.includes(sealedId)) problems.push({ kind: 'missing', id: sealedId });
+    if (sealedId && !vault.listed.includes(sealedId)) {
+      // Another tab may have sealed between this list and this draft read: list once more, and if it is there now,
+      // load again rather than calling it a mismatch.
+      if (!again) {
+        const now = await retryOnce(() => api.listRecords()).catch(() => null);
+        if (now?.records.some((r) => r.id === sealedId)) return loadSpaceOnce(api, masterKey, opts, true);
+      }
+      problems.push({ kind: 'missing', id: sealedId });
+    }
   }
   if (problems.length && !opts.allowPartial) throw vaultError(problems);
   return { vault, slot, problems };

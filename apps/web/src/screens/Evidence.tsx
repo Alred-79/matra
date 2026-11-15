@@ -18,6 +18,7 @@ import {
   resumeFrom,
   shortHash,
   uploadEvidence,
+  vaultError,
 } from '../lib/vault';
 import { SlotConflictError, saveDraftSlot } from '../lib/draftSlot';
 
@@ -64,10 +65,15 @@ export function Evidence() {
   const [persistMsg, setPersistMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Fails closed (lib/vault.ts loadSpace): adding a file saves its details to her draft, and a draft built from a space
-  // that didn't load cleanly could be older than her newest. Then nothing is uploaded; she sees why, and Try again.
+  // Fails closed for writing (lib/vault.ts loadSpace): adding a file saves its details to her draft, and a draft built
+  // from a space that didn't load cleanly could be older than her newest. Then nothing is uploaded; she sees why, and
+  // Try again. Her files stay listed (read-only), with the details of what did load.
   const loadExisting = useCallback(async () => {
-    const [{ vault, slot }, { blobs }, mem] = await Promise.all([loadSpace(api, session.masterKey), api.listBlobs(), getWorkingData()]);
+    const [{ vault, slot, problems }, { blobs }, mem] = await Promise.all([
+      loadSpace(api, session.masterKey, { allowPartial: true }),
+      api.listBlobs(),
+      getWorkingData(),
+    ]);
     const resume = resumeFrom(slot.slot, vault);
     const final = resume.final;
     const meta = mergeEvidence(legacyDraftEvidence(vault), resume.evidence, final?.payload.record?.evidence, mem?.evidence);
@@ -79,6 +85,8 @@ export function Evidence() {
       escrowedHashes: resume.escrowedHashes,
       slotVersion: slot.version,
       inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
+      /** what didn't load cleanly: when set, nothing is uploaded or saved from this page */
+      stop: problems.length ? vaultError(problems).message : null,
     };
   }, [api, session.masterKey, getWorkingData]);
   const existing = useAsync(loadExisting, [loadExisting]);
@@ -97,6 +105,10 @@ export function Evidence() {
       if (!opened) opened = await loadExisting();
     } catch (e) {
       setPersistMsg(`Nothing was uploaded. ${friendlyError(e)}`);
+      return;
+    }
+    if (opened.stop) {
+      setPersistMsg(`Nothing was uploaded. ${opened.stop}`);
       return;
     }
     const added: EvidenceItem[] = [];
@@ -168,8 +180,9 @@ export function Evidence() {
         Evidence
       </PageTitle>
       {existing.error && !existing.loading && <VaultStopped error={existing.error} onRetry={() => void existing.reload()} />}
+      {existing.data?.stop && !existing.loading && <VaultStopped error={existing.data.stop} onRetry={() => void existing.reload()} />}
 
-      {!existing.error && (
+      {!existing.error && !existing.data?.stop && (
       <section className="card stack" aria-labelledby="add">
         <h2 id="add">Add something</h2>
         <div

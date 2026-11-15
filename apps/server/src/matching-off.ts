@@ -95,7 +95,7 @@ export function checkLeftoverMatchingRows(db: DB, production: boolean): void {
   if (!matchEntries && !reportReleases) return;
   const msg =
     `MATRA_MATCHING is off, but this database still holds ${matchEntries} sealed-match entr${matchEntries === 1 ? 'y' : 'ies'} ` +
-    `and ${reportReleases} report release${reportReleases === 1 ? '' : 's'} from when matching was on. They stay untouched and unreachable.`;
+    `and ${reportReleases} report release${reportReleases === 1 ? '' : 's'} from when matching was on. They stay unreachable, and nothing is deleted; housekeeping ends any live release for her (and deletes the counselor's copy of its keys).`;
   if (production) throw new Error(`${msg} Refusing to start in production: decide what happens to them first (docs/DEPLOY.md).`);
   console.warn(`[matra] WARNING: ${msg}`);
 }

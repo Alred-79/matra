@@ -235,6 +235,81 @@ test('pilot 2d. words she typed but did not add are still there after she seals 
   await signOut(page);
 });
 
+test('pilot 2e. part of her space doesn’t match what she saved: she reads and keeps writing in her draft; sealing and sharing stay off', async ({ page }) => {
+  const alias = `wren-mismatch-${RUN}`;
+  const journal = page.locator('.space-journal .space-entry-text');
+  await registerSurvivor(page, alias);
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  await storySafety(page, 'Yes');
+  await addToStory(page, 'BEFORE the seal.');
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await sealFromReview(page);
+  const posts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/vault/records') posts.push(r.url());
+  });
+
+  // A. Her newest seal is gone from the list (as after restoring the main database from an older backup), while her
+  //    draft still says it became that seal.
+  let hidden: string | null = null;
+  await page.route(/\/api\/vault\/records$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const res = await route.fetch();
+    const body = (await res.json()) as { records: Array<{ id: string; createdAt: string }> };
+    hidden ??= [...body.records].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!.id;
+    await route.fulfill({ response: res, json: { records: body.records.filter((r) => r.id !== hidden) } });
+  });
+  await nav(page, 'Sharing');
+  await expect(page.getByTestId('vault-stopped')).toContainText('doesn’t match what you saved', { timeout: 60_000 });
+  await expect(page.getByRole('button', { name: 'Review and decide' })).toHaveCount(0);
+  await nav(page, 'My story');
+  await expect(page.getByTestId('vault-stopped')).toContainText('doesn’t match what you saved', { timeout: 60_000 });
+  await expect(page.getByTestId('draft-words')).toContainText('BEFORE the seal.');
+  await page.getByRole('button', { name: 'Keep writing in your draft' }).click();
+  await expect(page.getByTestId('story-draft-only')).toBeVisible();
+  await expect(journal).toHaveText(['BEFORE the seal.']);
+  const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && /\/api\/vault\/slots\//.test(r.url()) && r.ok(), { timeout: 60_000 });
+  await addToStory(page, 'AFTER, written while the seal was missing.');
+  await saved;
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await page.getByRole('button', { name: 'Seal my account' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Sealing is off for now' })).toBeVisible({ timeout: 30_000 });
+  expect(posts).toHaveLength(0);
+  // Her save no longer names the lost seal, so her space opens cleanly again (still without that seal)
+  await nav(page, 'Home');
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('vault-stopped')).toHaveCount(0);
+  await expect(journal).toHaveText(['BEFORE the seal.', 'AFTER, written while the seal was missing.']);
+  await page.unroute(/\/api\/vault\/records$/);
+
+  // B. One byte of her sealed version was changed on the server.
+  await page.route(/\/api\/vault\/records\/[^/]+$/, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.json()) as { record: { envelope: { ct: string } } };
+    const ct = body.record.envelope.ct;
+    const i = Math.floor(ct.length / 2);
+    body.record.envelope.ct = ct.slice(0, i) + (ct[i] === 'A' ? 'B' : 'A') + ct.slice(i + 1);
+    await route.fulfill({ response: res, json: body });
+  });
+  await nav(page, 'Home');
+  await nav(page, 'My story');
+  await expect(page.getByTestId('vault-stopped')).toContainText('doesn’t match what you saved', { timeout: 60_000 });
+  await expect(page.getByTestId('draft-words')).toContainText('AFTER, written while the seal was missing.');
+  await page.getByRole('button', { name: 'Keep writing in your draft' }).click();
+  await expect(journal).toHaveText(['BEFORE the seal.', 'AFTER, written while the seal was missing.']);
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
+  await page.getByRole('button', { name: 'Seal my account' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Sealing is off for now' })).toBeVisible({ timeout: 30_000 });
+  await nav(page, 'Sharing');
+  await expect(page.getByTestId('vault-stopped')).toContainText('doesn’t match what you saved', { timeout: 60_000 });
+  await expect(page.getByRole('button', { name: 'Review and decide' })).toHaveCount(0);
+  expect(posts).toHaveLength(0);
+  await page.unroute(/\/api\/vault\/records\/[^/]+$/);
+  await signOut(page);
+});
+
 test('pilot 3. the attorney opens and verifies what she shared', async ({ page }) => {
   const api = recordApi(page);
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');

@@ -27,7 +27,8 @@ export async function renewShare(api: ApiClient, masterKey: CryptoKey, share: Sh
     await api.renewShare(share.id, { expiresInDays });
     return;
   }
-  if (!record || record.meta.id !== share.recordId) throw new RenewError('Your sealed account is still opening. Please try again in a moment.');
+  if (!record || record.meta.id !== share.recordId)
+    throw new RenewError('The version this share is of isn’t open on this page, so nothing was renewed. You could try again from Home in a moment, or share again instead.');
   const { attorneys, directory } = await api.listAttorneys();
   const attorney = attorneys.find((a) => a.userId === share.attorneyId);
   if (!attorney)

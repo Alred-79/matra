@@ -50,8 +50,9 @@ describe('Evidence fails closed: nothing is uploaded unless her space loaded cle
 
     const stopped = await screen.findByTestId('vault-stopped', {}, { timeout: 15_000 });
     expect(stopped).toHaveTextContent(/We couldn’t reach Matra to open all of your space just now/);
-    // no way to add a file from a space that didn't load
+    // no way to add a file from a space that didn't load; her files stay listed (read-only)
     expect(screen.queryByLabelText('Choose evidence files')).toBeNull();
+    expect(await screen.findByTestId('evidence-in-space')).toBeInTheDocument();
     const writes = fetchImpl.mock.calls.filter(([u, i]) => {
       const path = new URL(String(u), 'http://x').pathname;
       return i?.method && i.method !== 'GET' && (path === '/api/vault/blobs' || path === '/api/vault/records' || path.startsWith('/api/vault/slots/'));

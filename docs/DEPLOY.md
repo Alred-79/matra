@@ -24,7 +24,8 @@ the pilot setting.** Production requires it to be set, at build time and at run 
   `MATRA_HOLDER_TOKEN_KEY*`, `MATRA_MATCHER_URL`, `MATRA_MATCHER_KEY*`, `MATRA_MATCHER_TOKEN*`,
   `MATRA_ATTESTATION_PLATFORM_KEY*`, `MATRA_PHONE_HASH_KEY*`, `MATRA_SMS_*`, `TWILIO_*`, the retired
   `MATRA_OPRF_KEY_A/B*`), and a production server refuses to start over a database
-  that still holds sealed-match entries or report releases (development only warns; nothing is deleted). A web build
+  that still holds sealed-match entries or report releases (development only warns; nothing is deleted, but
+  housekeeping ends any live report release for her and deletes the counselor's copy of its keys). A web build
   that is off refuses the OPRF and matcher pins; it still needs `MATRA_COUNSELOR_ROSTER_PUBKEY`, which signs the attorney
   directory. The key holders and the matcher refuse to run with `MATRA_MATCHING=off`.
 - **On:** everything below about sealed matching applies. The demo stack (`npm run demo`, `compose.yaml`, the Render

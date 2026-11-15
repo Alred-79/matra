@@ -13,7 +13,7 @@ import { decryptBlob, decryptJSON, publicKeyFingerprint, unwrapKeyWithPrivate, w
 import { getDb } from './app.js';
 import { openDb } from './db.js';
 import { WRAP_GRACE_DAYS, sweepRecipientKeys } from './recipient-keys.js';
-import { createRecord, makeApp, registerUser, uploadBlob, type TestUser } from './test-helpers.js';
+import { createRecord, makeApp, makeMatchingApp, registerUser, uploadBlob, type TestUser } from './test-helpers.js';
 
 const DAY = 86_400_000;
 const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
@@ -158,20 +158,49 @@ describe('renewing after the keys were deleted takes a fresh wrap from her devic
 });
 
 describe('with sealed matching off', () => {
-  it('the sweep still deletes keys of report releases written while it was on; the routes stay 404', async () => {
+  it('housekeeping ends live report releases for her and deletes the keys of old ones; the routes stay 404', async () => {
     const { app } = makeApp();
     const db = getDb(app);
+    const jane = await registerUser(app, 'jane.off');
+    const loc = await registerUser(app, 'loc.off', 'attorney'); // any second account; counselor sign-up is off
+    const insert = db.prepare(
+      `INSERT INTO report_releases (id, request_id, survivor_id, counselor_id, record_id, recipient_wrapped_key, consent_statement, status,
+                                    created_at, expires_at, ledger_entry_id) VALUES (?, ?, ?, ?, 'r1', '{"v":1}', 'yes', 'active', ?, ?, 'l1')`,
+    );
     const old = new Date(Date.now() - 45 * DAY).toISOString();
+    insert.run('rel-old', 'rq-old', jane.user.id, loc.user.id, old, old);
+    insert.run('rel-live', 'rq-live', jane.user.id, loc.user.id, new Date().toISOString(), new Date(Date.now() + 60 * DAY).toISOString());
+    db.prepare(`INSERT INTO report_release_blobs (release_id, blob_id, recipient_wrapped_key) VALUES ('rel-live', 'b1', '{"v":1}')`).run();
+    app.locals.housekeeping();
+    const rows = db.prepare('SELECT id, status, revoke_reason AS reason, recipient_wrapped_key AS k FROM report_releases ORDER BY id').all();
+    expect(rows).toEqual([
+      // a live one is ended for her (she could neither see nor end it while matching is off)
+      { id: 'rel-live', status: 'revoked', reason: 'matching_off', k: null },
+      // an expired one too (it was still 'active'); both lose the counselor's copy of the keys
+      { id: 'rel-old', status: 'revoked', reason: 'matching_off', k: null },
+    ]);
+    expect(db.prepare('SELECT recipient_wrapped_key AS k FROM report_release_blobs').get()).toEqual({ k: null });
+    const ledger = db.prepare(`SELECT subject_id FROM ledger WHERE type = 'report.revoked' ORDER BY subject_id`).all();
+    expect(ledger).toEqual([{ subject_id: 'rel-live' }, { subject_id: 'rel-old' }]);
+    const trail = (await request(app).get('/api/audit').set(jane.auth)).body.events as Array<{ detail: string }>;
+    expect(trail.filter((e) => /sealed matching is turned off on this server/.test(e.detail))).toHaveLength(2);
+    // nothing is deleted, the guard is unchanged, and a second run does nothing new
+    app.locals.housekeeping();
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM ledger WHERE type = 'report.revoked'`).get()).toEqual({ n: 2 });
+    expect((await request(app).post('/api/report-releases/rel-live/revoke').set(jane.auth)).body.code).toBe('matching_disabled');
+    expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
+  });
+
+  it('with matching on, housekeeping leaves live releases alone', async () => {
+    const { app } = makeMatchingApp();
+    const db = getDb(app);
+    const jane = await registerUser(app, 'jane.on');
     db.prepare(
       `INSERT INTO report_releases (id, request_id, survivor_id, counselor_id, record_id, recipient_wrapped_key, consent_statement, status,
-                                    created_at, expires_at, ledger_entry_id) VALUES ('rel1', 'rq1', 'u1', 'c1', 'r1', '{"v":1}', 'yes', 'active', ?, ?, 'l1')`,
-    ).run(old, old);
-    db.prepare(`INSERT INTO report_release_blobs (release_id, blob_id, recipient_wrapped_key) VALUES ('rel1', 'b1', '{"v":1}')`).run();
+                                    created_at, expires_at, ledger_entry_id) VALUES ('rel', 'rq', ?, ?, 'r1', '{"v":1}', 'yes', 'active', ?, ?, 'l1')`,
+    ).run(jane.user.id, jane.user.id, new Date().toISOString(), new Date(Date.now() + 60 * DAY).toISOString());
     app.locals.housekeeping();
-    expect(db.prepare('SELECT recipient_wrapped_key AS k FROM report_releases').get()).toEqual({ k: null });
-    expect(db.prepare('SELECT recipient_wrapped_key AS k FROM report_release_blobs').get()).toEqual({ k: null });
-    const jane = await registerUser(app, 'jane.off');
-    expect((await request(app).post('/api/report-releases/rel1/revoke').set(jane.auth)).body.code).toBe('matching_disabled');
+    expect(db.prepare('SELECT status, recipient_wrapped_key AS k FROM report_releases').get()).toEqual({ status: 'active', k: '{"v":1}' });
   });
 });
 

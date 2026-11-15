@@ -101,7 +101,9 @@ With `MATRA_MATCHING=off` (the pilot setting) matching writes nothing: the serve
 accounts, and none of these tables gets a row, except `matching_meta`, which then holds only the org-signed attorney
 directory and an empty signed counselor roster (written by `verify-attorney` / `sign-roster`; the pilot needs the
 directory to share). The tables still exist (one schema for both settings). A production server set to off refuses to
-start over a database that still has sealed-match entries or report releases.
+start over a database that still has sealed-match entries or report releases. In other environments, housekeeping ends
+any live report release (as Matra ending it for her: `report.revoked`, reason `matching_off`) and deletes the
+counselor's copy of its keys; no row is deleted.
 
 | Table | What / why | Retention |
 |---|---|---|

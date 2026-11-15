@@ -7,16 +7,20 @@ import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common'
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
 import {
+  DRAFT_PROBLEM_ID,
   foldInLateEvidence,
   loadSpace,
   mergeEvidence,
   resumeFrom,
   shortHash,
   uploadEvidence,
+  vaultError,
+  type OpenedRecord,
+  type VaultProblem,
 } from '../lib/vault';
 import { SlotConflictError, loadDraftSlot, saveDraftSlot } from '../lib/draftSlot';
 import { sealStory } from '../lib/sealStory';
-import { VaultStopped } from '../components/UnreadableNote';
+import { DraftWords, VaultStopped } from '../components/UnreadableNote';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { matchContactOf } from '../intake/record';
 import { PhoneStepCard } from '../components/PhoneStepCard';
@@ -25,6 +29,9 @@ import { matchingApi } from '../api/matching';
 
 /** Shown if she tries to seal while two drafts disagree. */
 const CONFLICT_SEAL = 'Your draft was also saved from another device or tab. Choose which draft to keep (above) before you seal.';
+/** Shown if she tries to seal while writing in her draft only (part of her space didn't load cleanly). */
+const DRAFT_ONLY_SEAL =
+  'Sealing is off for now: something else stored for your space doesn’t match what you saved, or didn’t open. Your draft keeps saving. Try opening My story again later.';
 
 /** Autosave to her draft slot (lib/draftSlot.ts): at most one save per minute, a moment after a meaningful change. */
 const MIN_GAP_MS = 60_000;
@@ -34,6 +41,18 @@ interface Boot {
   working: WorkingData;
   previousFinalId?: string;
   hasSealed: boolean;
+  /**
+   * Set when she chose to keep writing in her draft although something else in her space didn't load cleanly: she
+   * resumed from the draft only, it autosaves, and sealing stays off (writes that build on records need a clean load).
+   */
+  draftOnly?: VaultProblem[];
+}
+
+/** Her space didn't load cleanly: why, her draft to read (if it opened), and whether she may keep writing in it. */
+interface Stopped {
+  message: string;
+  draft: IntakeDraft | null;
+  keepWriting: (() => void) | null;
 }
 
 export function Story() {
@@ -41,6 +60,7 @@ export function Story() {
   const navigate = useNavigate();
   const [boot, setBoot] = useState<Boot | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [stopped, setStopped] = useState<Stopped | null>(null);
   const workingRef = useRef<WorkingData | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
   const [vaultSave, setVaultSave] = useState<{ phase: SavePhase; at?: number }>({ phase: 'idle' });
@@ -67,12 +87,56 @@ export function Story() {
 
   // Load: in-memory working draft first; else her draft slot (or, for an account with no slot yet, its older records).
   // Fails closed (lib/vault.ts loadSpace): if any saved version or her draft didn't load, or didn't match what she
-  // saved, nothing here opens, saves or seals; she sees why, and Try again.
+  // saved, nothing here resumes from records or seals; she sees why, and Try again. If her draft itself opened, she can
+  // read it there, and may choose to keep writing in it (draft only): see `draftOnly`.
   useEffect(() => {
     let alive = true;
     setBootError(null);
+    setStopped(null);
     (async () => {
-      const [mem, { vault, slot }] = await Promise.all([getWorkingData(), loadSpace(api, session.masterKey)]);
+      const [mem, { vault, slot, problems }] = await Promise.all([getWorkingData(), loadSpace(api, session.masterKey, { allowPartial: true })]);
+      if (!alive) return;
+      const begin = (working: WorkingData, escrowed: string[], final: OpenedRecord | undefined, draftOnly?: VaultProblem[]) => {
+        workingRef.current = working;
+        escrowedRef.current = escrowed;
+        if (!mem?.draft && slot.slot && working.draft) {
+          // Resumed from her slot: that is what is saved, so there is nothing new to save yet.
+          auto.current.lastJson = JSON.stringify([working.draft, working.evidence]);
+          setVaultSave({ phase: 'saved', at: Date.parse(slot.slot.value.savedAt) });
+        }
+        setPastSafety(!!working.draft && safetyStage(working.draft) === 'done');
+        setMode(working.draft?.space?.mode === 'interview' ? 'interview' : 'space');
+        setFileCount(working.evidence.length);
+        setBoot({ working, previousFinalId: final?.meta.id, hasSealed: !!final, ...(draftOnly && { draftOnly }) });
+      };
+      if (problems.length) {
+        // Her draft itself opened (it decrypted under her key and is a draft) only if no problem is about it. Then she
+        // may keep writing in it: it resumes from the draft alone (never from records that may be older), autosaves
+        // with compare-and-swap, and sealing stays off. Her next save also drops a `sealedRecordId` the server no
+        // longer lists, so that problem clears by itself (a main database restored from an older backup).
+        const draftOpened = !slot.unreadable && !problems.some((p) => p.id === DRAFT_PROBLEM_ID);
+        const draft = draftOpened ? (mem?.draft ?? slot.slot?.value.draft ?? null) : null;
+        setStopped({
+          message: vaultError(problems).message,
+          draft,
+          keepWriting: draft
+            ? () => {
+                setStopped(null);
+                begin(
+                  {
+                    draft,
+                    evidence: mergeEvidence(slot.slot?.value.evidence, mem?.evidence),
+                    slotVersion: mem?.draft && mem.slotVersion !== undefined ? mem.slotVersion : slot.version,
+                  },
+                  slot.slot?.value.escrowedHashes ?? [],
+                  undefined,
+                  problems,
+                );
+              }
+            : null,
+        });
+        return;
+      }
       const resume = resumeFrom(slot.slot, vault);
       const final = resume.final;
       // A new sealed version keeps the evidence of the one it replaces.
@@ -86,18 +150,7 @@ export function Story() {
           evidence: mergeEvidence(sealedEvidence, resume.evidence, mem?.evidence),
           slotVersion: slot.version,
         };
-      if (!alive) return;
-      workingRef.current = working;
-      escrowedRef.current = resume.escrowedHashes;
-      if (!mem?.draft && slot.slot && working.draft) {
-        // Resumed from her slot: that is what is saved, so there is nothing new to save yet.
-        auto.current.lastJson = JSON.stringify([working.draft, working.evidence]);
-        setVaultSave({ phase: 'saved', at: Date.parse(slot.slot.value.savedAt) });
-      }
-      setPastSafety(!!working.draft && safetyStage(working.draft) === 'done');
-      setMode(working.draft?.space?.mode === 'interview' ? 'interview' : 'space');
-      setFileCount(working.evidence.length);
-      setBoot({ working, previousFinalId: final?.meta.id, hasSealed: !!final });
+      begin(working, resume.escrowedHashes, final);
     })().catch((e) => alive && setBootError(friendlyError(e)));
     return () => {
       alive = false;
@@ -298,6 +351,7 @@ export function Story() {
    */
   async function onComplete(intake: IntakeRecord): Promise<void> {
     if (!boot) throw new Error('Your vault is still opening.');
+    if (boot.draftOnly) throw new Error(DRAFT_ONLY_SEAL);
     if (conflictRef.current) throw new Error(CONFLICT_SEAL);
     window.clearTimeout(saveTimer.current);
     // No draft autosave while sealing: sealStory saves the draft itself, first, with compare-and-swap.
@@ -481,9 +535,34 @@ export function Story() {
       <PageTitle>My story</PageTitle>
       {bootError && boot && <ErrorNote>{bootError}</ErrorNote>}
       {bootError && !boot && <VaultStopped error={bootError} onRetry={() => setBootRound((n) => n + 1)} />}
-      {!boot && !bootError && <Loading label="Opening your draft…" />}
+      {stopped && (
+        <>
+          <VaultStopped error={stopped.message} onRetry={() => setBootRound((n) => n + 1)} />
+          {stopped.keepWriting && (
+            <div className="card soft stack" data-testid="story-keep-writing">
+              <p className="small" style={{ margin: 0 }}>
+                Your draft itself opened as you saved it. You can keep writing in it, and it keeps saving. Sealing and
+                sharing stay off until everything else in your space matches what you saved again.
+              </p>
+              <div>
+                <button type="button" className="btn btn-small" onClick={stopped.keepWriting}>
+                  Keep writing in your draft
+                </button>
+              </div>
+            </div>
+          )}
+          {stopped.draft && <DraftWords draft={stopped.draft} />}
+        </>
+      )}
+      {!boot && !bootError && !stopped && <Loading label="Opening your draft…" />}
       {boot && (
         <>
+          {boot.draftOnly && (
+            <p className="card warn small" role="status" data-testid="story-draft-only">
+              You’re writing in your draft only. Something else stored for your space doesn’t match what you saved, or
+              didn’t open, so sealing and sharing are off for now. Your draft keeps saving.
+            </p>
+          )}
           {conflictCard}
           {boot.hasSealed && (
             <p className="card soft small">

@@ -1,3 +1,6 @@
+import { useState } from 'react';
+import type { IntakeDraft } from '../integration/intakeAdapter';
+import { typedText } from '../dev/mirror';
 import { vaultProblemNotice, type VaultProblem } from '../lib/vault';
 
 /**
@@ -31,5 +34,50 @@ export function VaultStopped({ error, onRetry }: { error: string; onRetry(): voi
         </button>
       </div>
     </div>
+  );
+}
+
+/** Her words in a draft, as she typed them: story pieces, then unsent text, then typed answers (read-only). */
+export function draftWords(draft: IntakeDraft): { story: string[]; answers: string } {
+  const story = (draft.entries ?? []).map((e) => e.text.trim()).filter(Boolean);
+  const composer = draft.space?.composer?.trim();
+  if (composer) story.push(composer);
+  return { story, answers: typedText(draft.answers ?? {}) };
+}
+
+/**
+ * Her draft, read-only, on a stopped screen: reading her own words never depends on a download. With a button to copy
+ * them. Renders nothing for an empty draft.
+ */
+export function DraftWords({ draft }: { draft: IntakeDraft }) {
+  const { story, answers } = draftWords(draft);
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null);
+  if (!story.length && !answers) return null;
+  const text = [...story, ...(answers ? [answers] : [])].join('\n\n');
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied('yes');
+    } catch {
+      setCopied('no');
+    }
+  }
+  return (
+    <section className="card stack" aria-labelledby="draft-words" data-testid="draft-words">
+      <h2 id="draft-words">Your draft, as you saved it</h2>
+      {story.map((t, i) => (
+        <p key={i} style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+          {t}
+        </p>
+      ))}
+      {answers && <p className="small muted" style={{ margin: 0 }}>Your answers: {answers}</p>}
+      <div className="row">
+        <button type="button" className="btn btn-small" onClick={() => void copy()}>
+          Copy my words
+        </button>
+        {copied === 'yes' && <span className="small muted" role="status">Copied.</span>}
+        {copied === 'no' && <span className="small muted" role="status">This browser didn’t allow copying. You can select the text instead.</span>}
+      </div>
+    </section>
   );
 }

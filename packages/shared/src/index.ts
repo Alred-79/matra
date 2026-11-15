@@ -498,7 +498,8 @@ export type ReportReleaseStatus = 'active' | 'revoked';
  * behalf: 'conflict' (the counselor later found a conflict), 'resealed' (her entry moved to a new matching key and so
  * to a new group), 'withdrawn' (she withdrew the entry; the rows are then deleted, only the ledger row remains).
  */
-export type ReportRevokeReason = 'survivor' | 'conflict' | 'resealed' | 'withdrawn';
+/** 'matching_off': the server runs with MATRA_MATCHING=off, so Matra ended a release she could no longer see or end. */
+export type ReportRevokeReason = 'survivor' | 'conflict' | 'resealed' | 'withdrawn' | 'matching_off';
 
 /**
  * Stage 2: the counselor asks ONE matched survivor for her full report. The survivor decides alone; the counselor
