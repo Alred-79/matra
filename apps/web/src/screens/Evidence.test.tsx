@@ -33,7 +33,7 @@ describe('Evidence fails closed: nothing is uploaded unless her space loaded cle
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-evidence', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-evidence', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     const s = current!.session!;
     stored.push(
@@ -97,7 +97,7 @@ describe('Evidence: file details go to her draft slot', () => {
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-slot', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-slot', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     rerender(
       <Harness fetchImpl={fetchImpl as unknown as typeof fetch}>

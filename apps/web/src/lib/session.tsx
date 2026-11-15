@@ -33,6 +33,7 @@ import { MatchingApiClient } from '../api/matching';
 import { UnreadableVaultError, getProfile as loadProfileRecord, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 import { mirror } from '../dev/mirror';
+import { canChoosePassphrase, isGeneratedPassphrase, passphraseAccepted, passphraseWords } from './passphrase';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
 
@@ -162,6 +163,20 @@ export function checkKdfIterations(n: unknown): number {
   return n;
 }
 
+/**
+ * A new passphrase must be one this device generated (attorneys and counselors: 7 words they can't replace) or, for a
+ * survivor who chose her own, reach the meter's 60 bits. The forms enforce the same; this is the last check before any
+ * key is derived from it. `context`: her alias.
+ */
+export function checkNewPassphrase(role: Role, passphrase: string, context: readonly string[] = []): void {
+  if (!canChoosePassphrase(role)) {
+    if (!isGeneratedPassphrase(passphrase, passphraseWords(role)))
+      throw new SessionError(`Attorney and counselor accounts use the ${passphraseWords(role)} words made on this device. Please use those.`);
+  } else if (!passphraseAccepted(passphrase, context)) {
+    throw new SessionError('That passphrase would be too easy to guess. Try six random words, like the one we made for you.');
+  }
+}
+
 const Ctx = createContext<SessionCtx | null>(null);
 
 export function SessionProvider({
@@ -244,6 +259,7 @@ export function SessionProvider({
   const register = useCallback<SessionCtx['register']>(
     async ({ username, passphrase, role, attorneyProfile, ageConfirmed18, preferredName }, onProgress) => {
       if (role === 'survivor' && !ageConfirmed18) throw new SessionError('Please confirm you are 18 or older.');
+      checkNewPassphrase(role, passphrase, [username]);
       const kdfSalt = newKdfSalt();
       onProgress?.('deriving');
       const { authKey, masterKey } = await deriveKeys(passphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
@@ -500,6 +516,7 @@ export function SessionProvider({
         finish: async (newPassphrase, progress) => {
           const secret = as;
           if (!secret) throw new SessionError('This reset has ended. Please enter your recovery code again.');
+          checkNewPassphrase('survivor', newPassphrase, [username]);
           progress?.('deriving');
           const kdfSalt = newKdfSalt();
           const keys = await derivePassphraseKeys(newPassphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);

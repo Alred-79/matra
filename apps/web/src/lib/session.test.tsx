@@ -4,6 +4,7 @@ import { DEFAULT_KDF_ITERATIONS, deriveRecoveryKeys, derivePassphraseKeys, gener
 import type { RegisterRequest } from '@matra/shared';
 import { fakeAuthFetch } from '../test/fakeServer';
 import { Harness, current } from '../test/sessionHarness';
+import { generatePassphrase } from './passphrase';
 import { RecoveryMaybeFinishedError, checkKdfIterations, type RecoveryReset } from './session';
 
 describe('session', () => {
@@ -19,7 +20,7 @@ describe('session', () => {
     render(<Harness fetchImpl={fetchImpl} />);
 
     await act(async () => {
-      await current!.register({ username: 'bluebird-42', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'bluebird-42', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     expect(screen.getByTestId('state')).toHaveTextContent('in:bluebird-42');
     await act(async () => {
@@ -36,7 +37,7 @@ describe('session', () => {
     });
 
     await act(async () => {
-      const s = await current!.login('bluebird-42', 'acorn-maple-violin-otter-quartz');
+      const s = await current!.login('bluebird-42', 'acorn-maple-violin-otter-quartz-heron');
       expect(s.privateKey.type).toBe('private');
     });
     expect(screen.getByTestId('state')).toHaveTextContent('in:bluebird-42');
@@ -44,6 +45,37 @@ describe('session', () => {
     for (const spy of [setItem, local, sess, cookie]) expect(spy).not.toHaveBeenCalled();
     if (idb) expect(idb).not.toHaveBeenCalled();
   }, 60_000);
+});
+
+describe('new passphrases (PR 7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('an attorney or counselor account can only be made with the 7 words this device generated', async () => {
+    const { fetchImpl } = fakeAuthFetch();
+    render(<Harness fetchImpl={fetchImpl} />);
+    const attorneyProfile = { displayName: 'A. Counsel', jurisdictions: ['NJ'], practiceAreas: [], acceptsProBono: true };
+    for (const passphrase of ['my own very long and very strong passphrase here', generatePassphrase(6), generatePassphrase(7).replace(/-/g, ' ')])
+      await act(async () => {
+        await expect(current!.register({ username: 'counsel-1', passphrase, role: 'attorney', attorneyProfile })).rejects.toThrow(
+          /use the 7 words made on this device/,
+        );
+      });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await act(async () => {
+      await current!.register({ username: 'counsel-1', passphrase: generatePassphrase(7), role: 'attorney', attorneyProfile });
+    });
+    expect(screen.getByTestId('state')).toHaveTextContent('in:counsel-1');
+  }, 60_000);
+
+  it('a survivor’s own passphrase must reach the meter’s 60 bits; nothing is sent otherwise', async () => {
+    const { fetchImpl } = fakeAuthFetch();
+    render(<Harness fetchImpl={fetchImpl} />);
+    for (const passphrase of ['password password password password', 'a'.repeat(28), 'acorn-maple-violin-otter-quartz', 'wren-13 quiet harbor maple lantern seven'])
+      await act(async () => {
+        await expect(current!.register({ username: 'wren-13', passphrase, role: 'survivor', ageConfirmed18: true })).rejects.toThrow(/too easy to guess/);
+      });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 describe('PBKDF2 rounds from the server', () => {
@@ -66,7 +98,7 @@ describe('PBKDF2 rounds from the server', () => {
     });
     render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await expect(current!.login('bluebird-42', 'acorn-maple-violin-otter-quartz')).rejects.toThrow(/weaker protection/);
+      await expect(current!.login('bluebird-42', 'acorn-maple-violin-otter-quartz-heron')).rejects.toThrow(/weaker protection/);
     });
     expect(fetchImpl.mock.calls.some(([u]) => String(u).endsWith('/api/auth/login'))).toBe(false);
     expect(screen.getByTestId('state')).toHaveTextContent('out');
@@ -75,7 +107,7 @@ describe('PBKDF2 rounds from the server', () => {
 
 describe('recovery reset (W20)', () => {
   afterEach(() => vi.restoreAllMocks());
-  const PASS = 'acorn-maple-violin-otter-quartz';
+  const PASS = 'acorn-maple-violin-otter-quartz-heron';
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
   /** fakeAuthFetch plus recover/start, recover/finish (scripted) and POST /api/account/recovery, recording bodies. */
@@ -123,7 +155,7 @@ describe('recovery reset (W20)', () => {
     let out!: Awaited<ReturnType<RecoveryReset['finish']>>;
     await act(async () => {
       const reset = await current!.beginRecovery('wren-11', code);
-      out = await reset.finish('brand new five word passphrase');
+      out = await reset.finish('brand-new-river-otter-lilac-heron-tulip');
     });
     expect(screen.getByTestId('state')).toHaveTextContent('in:wren-11');
     expect(calls.map((c) => c.route)).toEqual(['POST /api/auth/recover/finish']);
@@ -144,12 +176,12 @@ describe('recovery reset (W20)', () => {
     const { calls, code } = await setup(['network', 401]);
     await act(async () => {
       const reset = await current!.beginRecovery('wren-11', code);
-      await expect(reset.finish('brand new five word passphrase')).rejects.toThrow(/reach the server/);
-      const err = await reset.finish('brand new five word passphrase').catch((e: unknown) => e);
+      await expect(reset.finish('brand-new-river-otter-lilac-heron-tulip')).rejects.toThrow(/reach the server/);
+      const err = await reset.finish('brand-new-river-otter-lilac-heron-tulip').catch((e: unknown) => e);
       expect(err).toBeInstanceOf(RecoveryMaybeFinishedError);
       expect((err as Error).message).toMatch(/new passphrase could already be set/);
       // and the account secret is wiped: a third try can't send anything
-      await expect(reset.finish('brand new five word passphrase')).rejects.toThrow(/This reset has ended/);
+      await expect(reset.finish('brand-new-river-otter-lilac-heron-tulip')).rejects.toThrow(/This reset has ended/);
     });
     expect(calls).toHaveLength(2);
   }, 60_000);
@@ -158,7 +190,7 @@ describe('recovery reset (W20)', () => {
     const { code } = await setup([401]);
     await act(async () => {
       const reset = await current!.beginRecovery('wren-11', code);
-      const err = await reset.finish('brand new five word passphrase').catch((e: unknown) => e);
+      const err = await reset.finish('brand-new-river-otter-lilac-heron-tulip').catch((e: unknown) => e);
       expect(err).not.toBeInstanceOf(RecoveryMaybeFinishedError);
       expect((err as Error).message).toMatch(/enter your recovery code again/);
     });

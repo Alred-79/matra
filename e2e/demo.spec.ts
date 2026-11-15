@@ -750,7 +750,7 @@ test('8. delete everything: explained first (lawyer caution, what stays), typed 
 
 test('9. recovery code: set up (shown once, confirm last 4) → forgot passphrase → alias + code → new passphrase → same space; old passphrase and old code stop working', async ({ page }) => {
   const alias = `heron-rec-${RUN}`;
-  const NEW_PASS = 'e2e copper meadow lantern river nine';
+  const NEW_PASS = 'e2e copper meadow lantern river nine tulip';
   await registerSurvivor(page, alias);
   await expect(page.getByTestId('recovery-offer')).toBeVisible();
 

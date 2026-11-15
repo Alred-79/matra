@@ -31,7 +31,7 @@ describe('ReportRequest fails closed: only a space that loaded cleanly is releas
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-report', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-report', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     const s = current!.session!;
     stored.push(
@@ -76,7 +76,7 @@ describe('ReportRequest: only the sealed account itself is ever released', () =>
     });
     const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
     await act(async () => {
-      await current!.register({ username: 'wren-legacy', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-legacy', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     const s = current!.session!;
     stored.push(

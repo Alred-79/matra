@@ -43,7 +43,7 @@ async function homeWith(username: string, fail: Parameters<typeof vaultRoutes>[1
     </Harness>,
   );
   await act(async () => {
-    await current!.register({ username, passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+    await current!.register({ username, passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
   });
   const mk = current!.session!.masterKey;
   /** Home loaded on sign-up, before the records existed: sign in again so it loads them */
@@ -52,7 +52,7 @@ async function homeWith(username: string, fail: Parameters<typeof vaultRoutes>[1
       current!.lock();
     });
     await act(async () => {
-      await current!.login(username, 'acorn-maple-violin-otter-quartz');
+      await current!.login(username, 'acorn-maple-violin-otter-quartz-heron');
     });
   };
   return { fetchImpl, stored, shares, attorneys, mk, reopen };

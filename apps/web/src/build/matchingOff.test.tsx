@@ -105,7 +105,7 @@ describe('matching off: the app', () => {
       </Harness>,
     );
     await act(async () => {
-      await current!.register({ username: 'wren-pilot', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-pilot', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     await screen.findByTestId('tile-sharing');
     await waitFor(() => expect(paths).toContain('/api/audit'));
@@ -127,7 +127,7 @@ describe('matching off: the app', () => {
         </Harness>,
       );
       await act(async () => {
-        await current!.register({ username: 'wren-on', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+        await current!.register({ username: 'wren-on', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
       });
       await screen.findByTestId('home-escrow');
       await waitFor(() => expect(paths).toEqual(expect.arrayContaining(['/api/escrow', '/api/report-requests'])));

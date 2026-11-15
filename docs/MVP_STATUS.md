@@ -106,7 +106,7 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 | Published incident-response plan and law-enforcement request guide | *weekend-mvp:* incident-response plan drafted ([ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md), pending counsel; Q-055, Q-036); law-enforcement request guide not written (Q-039) | You (templates exist elsewhere; counsel reviews) |
 | **W3** attorney key substitution | Mitigated on weekend-mvp: org-signed attorney directory checked automatically by her client (no phone call, no tick box). A production build that is not a demo now fails without the pin and refuses unpinned keys. Still to do: key transparency log | Code |
 | **W4** malicious client code: published build hashes, SRI, reproducible builds | CSP done; release process proposed in [ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md) (signed tags, published hashes, n-of-m approvals), not yet configured or shown reproducible | Code |
-| **W5** Argon2id and a passphrase-strength floor | Not done. *2026-11-11 (weekend-mvp):* an optional recovery code only she holds (128 random bits, shown once, confirm-last-4) can now set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone (W20). It does not change W5: the passphrase is still PBKDF2 | Code |
+| **W5** Argon2id and a passphrase-strength floor | Floor built, Argon2id not done. *2026-11-15:* generated passphrases are 6 random words from a screened EFF short list (1,109 words, about 60.7 bits; the screen still needs advocate review); a passphrase she chooses must reach an estimated 60 bits; attorneys and counselors get 7 generated words they can't replace. *2026-11-11 (weekend-mvp):* an optional recovery code only she holds (128 random bits, shown once, confirm-last-4) can now set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone (W20). It does not change W5: the passphrase is still PBKDF2 | Code |
 | **W7** attorney-verification procedure, plus MFA or passkeys for attorneys | Manual CLI flag only | Code + partner terms |
 | **W8** device safety (residue on exit, neutral naming) | Partly done (Quick Exit, idle lock) | Code + advocate review |
 | **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Partly done: no IPs or user agents on disk or in logs (daily-salted in-memory hashes for rate limits), route-only request logs (app server, key holders, matcher), expired sessions swept every 10 minutes, web build audited for third-party requests, [data inventory](PRIVACY_DATA_INVENTORY.md). Still to do: size padding for records, encrypted alias, edge-log settings at the host | Code + hosting |
@@ -119,7 +119,7 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 Short items that you or a contributor can do now, in rough priority order:
 
 1. Attorney MFA or passkeys and a logged verification workflow (W7, N7).
-2. Argon2id via WASM and a passphrase-strength meter (W5).
+2. Argon2id via WASM (W5; the strength floor is built).
 3. Metadata minimization, the rest of W11: size padding for records and blobs, encrypted share alias (IPs and request logs are done).
 4. Published build hashes and an SRI manifest (W4).
 5. ~~More crypto unit tests.~~ *Mostly done on weekend-mvp:* `packages/crypto` has 191 tests (tamper, wrong key, threshold t−1, attestation, recovery). Still worth adding: key-wrap round trips and fingerprint stability for the original vault code. Auditors price by uncertainty.

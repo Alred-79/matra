@@ -34,8 +34,8 @@ describe('CreateAccountForm (survivor) — 18+ gate', () => {
       </SessionProvider>,
     );
     await user.type(screen.getByLabelText(/Choose an alias/), 'wren-77');
-    await user.type(screen.getByLabelText('Passphrase'), 'pebble lantern fjord mango heron');
-    await user.type(screen.getByLabelText('Type it again'), 'pebble lantern fjord mango heron');
+    await user.type(screen.getByLabelText('Passphrase'), 'pebble lantern fjord mango heron willow');
+    await user.type(screen.getByLabelText('Type it again'), 'pebble lantern fjord mango heron willow');
     await user.click(screen.getByLabelText(/written my passphrase down/));
     const create = screen.getByRole('button', { name: 'Create my private space' });
     expect(create).toBeDisabled();
@@ -68,5 +68,63 @@ describe('CreateAccountForm (survivor) — 18+ gate', () => {
     expect(screen.getByText('Start page')).toBeInTheDocument();
     expect(screen.queryByLabelText('I am 18 or older.')).not.toBeInTheDocument();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('CreateAccountForm — passphrases (PR 7)', () => {
+  function renderForm(role: 'survivor' | 'attorney') {
+    render(
+      <SessionProvider fetchImpl={vi.fn() as unknown as typeof fetch}>
+        <MemoryRouter>
+          <CreateAccountForm role={role} />
+        </MemoryRouter>
+      </SessionProvider>,
+    );
+  }
+
+  it('survivor: suggests six random words; weak phrases keep the button off', async () => {
+    const user = userEvent.setup();
+    renderForm('survivor');
+    expect(screen.getByText(/^Six random words are easier to remember/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/Choose an alias/), 'wren-77');
+    await user.click(screen.getByLabelText(/written my passphrase down/));
+    await user.click(screen.getByLabelText('I am 18 or older.'));
+    const create = screen.getByRole('button', { name: 'Create my private space' });
+    for (const weak of ['password password password password', 'a'.repeat(28), 'pebble lantern fjord mango heron']) {
+      await user.clear(screen.getByLabelText('Passphrase'));
+      await user.clear(screen.getByLabelText('Type it again'));
+      await user.type(screen.getByLabelText('Passphrase'), weak);
+      await user.type(screen.getByLabelText('Type it again'), weak);
+      expect(screen.getByTestId('passphrase-strength')).not.toHaveTextContent(/^Strong/);
+      expect(create).toBeDisabled();
+    }
+    await user.click(screen.getByRole('button', { name: 'Use this passphrase' }));
+    const suggested = (screen.getByLabelText('Passphrase') as HTMLInputElement).value;
+    expect(suggested.split('-')).toHaveLength(6);
+    await user.type(screen.getByLabelText('Type it again'), suggested);
+    expect(screen.getByTestId('passphrase-strength')).toHaveTextContent(/^Strong/);
+    expect(create).toBeEnabled();
+  });
+
+  it('attorney: seven generated words and no box to type one of her own; only the generated words enable the button', async () => {
+    const user = userEvent.setup();
+    renderForm('attorney');
+    expect(screen.queryByLabelText('Passphrase')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use this passphrase' })).not.toBeInTheDocument();
+    const generated = screen.getByTestId('generated-passphrase').textContent!;
+    expect(generated.split('-')).toHaveLength(7);
+    await user.type(screen.getByLabelText(/^Username/), 'counsel-1');
+    await user.type(screen.getByLabelText('Display name'), 'A. Counsel');
+    await user.click(screen.getByLabelText(/written my passphrase down/));
+    const create = screen.getByRole('button', { name: 'Create attorney account' });
+    await user.type(screen.getByLabelText('Type it again'), 'my own very long and very strong passphrase here');
+    expect(create).toBeDisabled();
+    await user.clear(screen.getByLabelText('Type it again'));
+    await user.type(screen.getByLabelText('Type it again'), generated);
+    expect(create).toBeEnabled();
+    // different words: she has to copy the new ones
+    await user.click(screen.getByRole('button', { name: 'Different words' }));
+    expect(screen.getByTestId('generated-passphrase').textContent).not.toBe(generated);
+    expect(create).toBeDisabled();
   });
 });

@@ -42,7 +42,7 @@ describe('Share fails closed: only a space that loaded cleanly is offered', () =
       </Harness>,
     );
     await act(async () => {
-      await current!.register({ username, passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username, passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     const mk = current!.session!.masterKey;
     stored.push(await storedRecord(mk, { kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, { id: 'r-older' }));
@@ -59,7 +59,7 @@ describe('Share fails closed: only a space that loaded cleanly is offered', () =
       current!.lock();
     });
     await act(async () => {
-      await current!.login(username, 'acorn-maple-violin-otter-quartz');
+      await current!.login(username, 'acorn-maple-violin-otter-quartz-heron');
     });
     return { fetchImpl };
   }
@@ -118,7 +118,7 @@ describe('Share: only the sealed account itself is ever shared', () => {
       </Harness>,
     );
     await act(async () => {
-      await current!.register({ username: 'wren-clean', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+      await current!.register({ username: 'wren-clean', passphrase: 'acorn-maple-violin-otter-quartz-heron', role: 'survivor', ageConfirmed18: true });
     });
     const payload = legacy
       ? { kind: 'final', record: sampleRecord, draft: { answers: { 'person.matchContact': { detail: '555-0100' } } }, escrowedHashes: ['ab12'], savedAt: '2026-08-19T00:00:00Z' }
@@ -133,7 +133,7 @@ describe('Share: only the sealed account itself is ever shared', () => {
       current!.lock();
     });
     await act(async () => {
-      await current!.login('wren-clean', 'acorn-maple-violin-otter-quartz');
+      await current!.login('wren-clean', 'acorn-maple-violin-otter-quartz-heron');
     });
 
     await user.click(await screen.findByRole('button', { name: 'Review and decide' }, { timeout: 15_000 }));
