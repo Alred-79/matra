@@ -125,16 +125,23 @@ export async function createRecord(app: express.Express, u: TestUser, data: unkn
   return { res, key, envelope };
 }
 
-export async function uploadBlob(app: express.Express, u: TestUser, bytes = new TextEncoder().encode('evidence bytes')) {
+export async function uploadBlob(
+  app: express.Express,
+  u: TestUser,
+  bytes = new TextEncoder().encode('evidence bytes'),
+  /** the salted commitment to her original file's hash (header X-Evidence-Commitment); omitted by default */
+  commitment?: string,
+) {
   const key = await generateContentKey();
   const ct = await encryptBlob(bytes, key);
   const wrapped = await wrapKeyWithMaster(key, u.masterKey);
-  const res = await request(app)
+  let req = request(app)
     .post('/api/vault/blobs')
     .set(u.auth)
     .set('Content-Type', 'application/octet-stream')
-    .set('X-Owner-Wrapped-Key', Buffer.from(JSON.stringify(wrapped)).toString('base64'))
-    .send(Buffer.from(ct));
+    .set('X-Owner-Wrapped-Key', Buffer.from(JSON.stringify(wrapped)).toString('base64'));
+  if (commitment !== undefined) req = req.set('X-Evidence-Commitment', commitment);
+  const res = await req.send(Buffer.from(ct));
   return { res, key, ct };
 }
 

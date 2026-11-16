@@ -204,12 +204,14 @@ export class ApiClient {
   deleteSlot(name: string, expectedVersion?: string | null) {
     return this.json<{ ok: true }>('DELETE', `/api/vault/slots/${encodeURIComponent(name)}`, expectedVersion === undefined ? {} : { expectedVersion });
   }
-  async uploadBlob(ciphertext: Uint8Array, ownerWrappedKey: WrappedKey): Promise<CreateBlobResponse> {
+  /** `commitment`: the SALTED commitment to her original file's hash (evidence/commitment.ts), never a plain hash. */
+  async uploadBlob(ciphertext: Uint8Array, ownerWrappedKey: WrappedKey, commitment?: string): Promise<CreateBlobResponse> {
     const res = await this.raw('POST', '/api/vault/blobs', {
       body: ciphertext as unknown as BodyInit,
       headers: {
         'Content-Type': 'application/octet-stream',
         'X-Owner-Wrapped-Key': toBase64(new TextEncoder().encode(JSON.stringify(ownerWrappedKey))),
+        ...(commitment && { 'X-Evidence-Commitment': commitment }),
       },
     });
     return (await res.json()) as CreateBlobResponse;

@@ -503,55 +503,8 @@ export async function saveProfile(
 
 // ───────────── evidence ─────────────
 
-export function evidenceKindFor(file: { type: string; name: string }): EvidenceKind {
-  const t = file.type.toLowerCase();
-  if (t.startsWith('image/')) return /screen\s?shot|screen_shot|screenshot/i.test(file.name) ? 'screenshot' : 'photo';
-  if (t.startsWith('video/')) return 'video';
-  if (t.startsWith('audio/')) return 'audio';
-  if (t === 'application/pdf' || t.startsWith('text/') || t.includes('document')) return 'document';
-  return 'other';
-}
-
-export interface UploadedEvidence {
-  item: EvidenceItem;
-  /** stripped plaintext, for an in-memory preview only */
-  plaintext: Blob;
-  note: string;
-  ledgerEntry: LedgerEntry;
-}
-
-export async function uploadEvidence(
-  api: ApiClient,
-  masterKey: CryptoKey,
-  file: File,
-  extra: { description?: string; capturedAt?: string } = {},
-): Promise<UploadedEvidence> {
-  const { blob, stripped, note } = await stripMetadata(file);
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  const sha256 = await sha256Hex(bytes);
-  const key = await generateContentKey();
-  const ct = await encryptBlob(bytes, key);
-  const wrapped = await wrapKeyWithMaster(key, masterKey);
-  mirror(
-    'Evidence file',
-    `${file.name} (${formatBytes(bytes.byteLength)}${stripped ? ', location and camera data removed here' : ''})`,
-    `Encrypted here. The server gets ${formatBytes(ct.byteLength)} of ciphertext and its hash; not the file name.`,
-  );
-  const res = await api.uploadBlob(ct, wrapped);
-  const item: EvidenceItem = {
-    id: randomId(),
-    kind: evidenceKindFor(file),
-    fileName: file.name,
-    mimeType: blob.type || file.type || 'application/octet-stream',
-    sizeBytes: bytes.byteLength,
-    sha256,
-    blobId: res.blob.id,
-    description: extra.description || undefined,
-    capturedAt: extra.capturedAt || undefined,
-    metadataStripped: stripped,
-  };
-  return { item, plaintext: new Blob([bytes], { type: item.mimeType }), note, ledgerEntry: res.ledgerEntry };
-}
+// Adding a file (hash of the original, salted commitment, screenshot label, stripping, upload): src/evidence/importFile.ts.
+export { evidenceKindFor, importEvidence as uploadEvidence, type UploadedEvidence } from '../evidence/importFile';
 
 /** Decrypt an evidence blob and check its SHA-256 against the recorded hash. */
 export async function openEvidence(api: ApiClient, key: CryptoKey, blobId: string, expectedSha256?: string) {

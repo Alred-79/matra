@@ -893,8 +893,11 @@ export interface CreateRecordRequest { envelope: Envelope; ownerWrappedKey: Wrap
 export interface CreateRecordResponse { record: VaultRecordMeta; ledgerEntry: LedgerEntry }
 
 /** POST /api/vault/blobs — body is raw application/octet-stream ciphertext (iv||ct);
- *  header `X-Owner-Wrapped-Key` = base64(JSON(WrappedKey)). */
-export interface CreateBlobResponse { blob: BlobMeta; ledgerEntry: LedgerEntry }
+ *  header `X-Owner-Wrapped-Key` = base64(JSON(WrappedKey)).
+ *  Optional header `X-Evidence-Commitment` = 64 lowercase hex: the SALTED commitment SHA-256(salt || SHA-256(original file))
+ *  (apps/web/src/evidence/commitment.ts). The server cannot check it and learns nothing from it (the salt stays on her
+ *  device); it is ledgered as an 'evidence.committed' entry for this blob. The plain hash of any file is never sent. */
+export interface CreateBlobResponse { blob: BlobMeta; ledgerEntry: LedgerEntry; commitmentEntry?: LedgerEntry }
 
 export interface CreateShareRequest {
   recordId: string;

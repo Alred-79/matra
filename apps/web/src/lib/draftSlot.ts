@@ -71,6 +71,11 @@ export function setDraftMode(mode: DraftMode): void {
   for (const l of listeners) l();
 }
 
+/** The server's draft mode as last learned (every slot read and write teaches it). */
+export function currentDraftMode(): DraftMode {
+  return draftMode;
+}
+
 /** Whether earlier drafts are kept ('keep-versions') or each save replaces the last ('slot'), for honest copy. */
 export function useDraftMode(): DraftMode {
   return useSyncExternalStore(

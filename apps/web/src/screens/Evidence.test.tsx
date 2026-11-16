@@ -2,7 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { openSlot } from '@matra/crypto';
+import { openSlot, slotName } from '@matra/crypto';
 import { emptyDraft } from '../integration/intakeAdapter';
 import { fakeAuthFetch } from '../test/fakeServer';
 import { storedRecord, vaultRoutes, type StoredRecord } from '../test/fakeVault';
@@ -71,18 +71,22 @@ describe('Evidence: file details go to her draft slot', () => {
   it('saves the file details into her draft slot (never a new record), naming the seq it read', async () => {
     const user = userEvent.setup();
     const base = fakeAuthFetch();
-    let slot: { name: string; envelope: unknown; wrappedKey: unknown; version: string; updatedDay: string } | null = null;
+    // one slot per name: her draft slot, and the private evidence slot the evidence reader keeps beside it
+    type Slot = { name: string; envelope: unknown; wrappedKey: unknown; version: string; updatedDay: string };
+    const slots = new Map<string, Slot>();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://x');
       const method = init?.method ?? 'GET';
       if (url.pathname === '/api/vault/records' && method === 'GET') return json(200, { records: [] });
       if (url.pathname === '/api/vault/records' && method === 'POST') return json(500, { error: 'must not be called' });
-      if (url.pathname.startsWith('/api/vault/slots/') && method === 'GET') return json(200, { slot, draftMode: 'slot' });
+      if (url.pathname.startsWith('/api/vault/slots/') && method === 'GET') return json(200, { slot: slots.get(url.pathname.split('/').pop()!) ?? null, draftMode: 'slot' });
       if (url.pathname.startsWith('/api/vault/slots/') && method === 'PUT') {
         const body = JSON.parse(String(init!.body));
-        if ((slot?.version ?? null) !== body.expectedVersion) return json(409, { error: 'stale', code: 'slot_conflict' });
-        slot = { name: url.pathname.split('/').pop()!, envelope: body.envelope, wrappedKey: body.wrappedKey, version: 'a'.repeat(32), updatedDay: '2026-11-14' };
-        return json(200, { version: slot.version, updatedDay: slot.updatedDay, draftMode: 'slot' });
+        const name = url.pathname.split('/').pop()!;
+        if ((slots.get(name)?.version ?? null) !== body.expectedVersion) return json(409, { error: 'stale', code: 'slot_conflict' });
+        const saved = { name, envelope: body.envelope, wrappedKey: body.wrappedKey, version: 'a'.repeat(32), updatedDay: '2026-11-14' };
+        slots.set(name, saved);
+        return json(200, { version: saved.version, updatedDay: saved.updatedDay, draftMode: 'slot' });
       }
       if (url.pathname === '/api/vault/blobs' && method === 'GET') return json(200, { blobs: [] });
       if (url.pathname === '/api/vault/blobs' && method === 'POST') {
@@ -110,8 +114,9 @@ describe('Evidence: file details go to her draft slot', () => {
     expect(await screen.findByText('Saved to your space and added to your draft story.', {}, { timeout: 15_000 })).toBeInTheDocument();
     const posts = fetchImpl.mock.calls.filter(([u, i]) => new URL(String(u), 'http://x').pathname === '/api/vault/records' && i?.method === 'POST');
     expect(posts).toHaveLength(0);
-    expect(slot!.version).toBe('a'.repeat(32));
     const s = current!.session!;
+    const slot = slots.get(await slotName(s.masterKey, 'draft'));
+    expect(slot!.version).toBe('a'.repeat(32));
     const opened = await openSlot<{ kind: string; evidence: Array<{ fileName: string }> }>(slot as never, s.masterKey);
     expect(opened.kind).toBe('draft');
     expect(opened.evidence.map((e) => e.fileName)).toEqual(['note.pdf']);

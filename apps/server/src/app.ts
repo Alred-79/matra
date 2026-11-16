@@ -586,7 +586,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.use(
     cors({
       origin: opts.corsOrigins ?? ['http://localhost:5173', 'http://127.0.0.1:5173'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Owner-Wrapped-Key'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Owner-Wrapped-Key', 'X-Evidence-Commitment'],
       exposedHeaders: ['X-Content-Hash', 'X-Blob-Id'],
       maxAge: 600,
     }),
@@ -1187,18 +1187,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
       } catch {
         throw new HttpError(400, 'invalid_wrapped_key', 'Header X-Owner-Wrapped-Key must be base64(JSON(WrappedKey)) with alg A256GCM-KW.');
       }
+      // Optional: the SALTED commitment to her original file's hash (never a plain hash; see ledger.ts evidence.committed).
+      const commitmentHdr = req.get('x-evidence-commitment');
+      if (commitmentHdr !== undefined && !/^[0-9a-f]{64}$/.test(commitmentHdr))
+        throw new HttpError(400, 'invalid_commitment', 'Header X-Evidence-Commitment must be 64 lowercase hex characters.');
       const id = newId();
       const contentHash = sha256Hex(data);
       let ledgerEntry!: LedgerEntry;
+      let commitmentEntry: LedgerEntry | undefined;
       db.transaction(() => {
         ledgerEntry = appendLedger(db, 'blob.sealed', id, contentHash);
+        if (commitmentHdr) commitmentEntry = appendLedger(db, 'evidence.committed', id, commitmentHdr);
         db.prepare(
           `INSERT INTO blobs (id, owner_id, data, size_bytes, content_hash, owner_wrapped_key, created_at, ledger_entry_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(id, me.id, data, data.length, contentHash, JSON.stringify(wrapped), ledgerEntry.timestamp, ledgerEntry.id);
         audit(me.id, 'blob.uploaded', `Encrypted evidence file sealed (ledger #${ledgerEntry.seq})`);
       })();
-      res.status(201).json({ blob: toBlobMeta(q.blobMetaById.get(id) as BlobRow), ledgerEntry });
+      res.status(201).json({ blob: toBlobMeta(q.blobMetaById.get(id) as BlobRow), ledgerEntry, ...(commitmentEntry && { commitmentEntry }) });
     },
   );
 
