@@ -168,7 +168,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: apps/web/public/models
-          key: models-${{ hashFiles('apps/web/src/voice/model-manifest.json', 'scripts/fetch-models.mjs') }}
+          key: models-${{ hashFiles('apps/web/src/ml/manifest.json', 'scripts/fetch-models.mjs') }}
       - run: node scripts/fetch-models.mjs
       - run: node scripts/fetch-models.mjs --check
 

@@ -66,7 +66,7 @@ node scripts/fetch-models.mjs --check    # verify only (exit 1 if anything is mi
 MATRA_SKIP_MODELS=1 npm run build        # build without voice: the app offers typing instead
 ```
 
-The build machine (or Docker build stage) needs outbound HTTPS to `huggingface.co`. The running server never contacts it. The model revision and hashes are in `apps/web/src/voice/model-manifest.json`. What she downloads once, on first use, is about 94 MB (model 80 MB + CPU runtime 14 MB). The browser keeps it in Cache Storage under a neutral name (`speech-model-…`), so it is not downloaded again.
+The build machine (or Docker build stage) needs outbound HTTPS to `huggingface.co`. The running server never contacts it. The model revision and hashes are in `apps/web/src/ml/manifest.json`. What she downloads once, on first use, is about 94 MB (model 80 MB + CPU runtime 14 MB). The browser keeps it in Cache Storage under a neutral name (`speech-model-…`), so it is not downloaded again.
 
 Optional speed-up: sending `Cross-Origin-Embedder-Policy: require-corp` alongside the existing `Cross-Origin-Opener-Policy: same-origin` makes the page cross-origin isolated, and transcription then uses up to 4 wasm threads. In our measurements this was about 3× faster. The server does not send this header yet.
 

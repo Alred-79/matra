@@ -3,7 +3,7 @@
  * terminated on Quick Exit / lock (wipe) so no audio or model state lingers in memory.
  */
 import { onWipe } from '../lib/wipe';
-import { CACHE_NAME, MODEL_WEIGHT_PATHS, RUNTIME_FILES, runtimeCacheKey } from './config';
+import { CACHE_NAME, MODEL_WEIGHT_PATHS, RUNTIME_CACHE_NAME, RUNTIME_FILES, runtimeCacheKey } from './config';
 import type { Device, FromWorker, ToWorker } from './protocol';
 import type { TranscriptResult } from './types';
 
@@ -179,7 +179,9 @@ export async function isTranscriberSetUp(): Promise<boolean> {
     if (typeof caches === 'undefined') return false;
     const cache = await caches.open(CACHE_NAME);
     for (const p of MODEL_WEIGHT_PATHS) if (!(await cache.match(p))) return false;
-    return !!(await cache.match(runtimeCacheKey(RUNTIME_FILES.wasm))) || !!(await cache.match(runtimeCacheKey(RUNTIME_FILES.webgpu)));
+    // Presence only: the bytes are checked against their pinned hash when the worker loads them (src/ml/cache.ts).
+    const runtime = await caches.open(RUNTIME_CACHE_NAME);
+    return !!(await runtime.match(runtimeCacheKey(RUNTIME_FILES.wasm))) || !!(await runtime.match(runtimeCacheKey(RUNTIME_FILES.webgpu)));
   } catch {
     return false;
   }

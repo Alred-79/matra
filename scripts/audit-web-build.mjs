@@ -14,10 +14,15 @@
  *      fails. A build made with MATRA_MATCHING=on skips this check. (Tree-shaking can leave an empty chunk behind, named after a
  *      module it emptied; what counts is that none of these strings is in any shipped file.)
  *
+ *  5. Model and runtime files (dist/models): every file is listed in apps/web/src/ml/manifest.json with the same size and
+ *     SHA-256, and nothing else is there. A dist/models without models (MATRA_SKIP_MODELS=1) is fine; a wrong or unlisted
+ *     file is not: the browser would refuse it at run time, and an unlisted one should not be served at all.
+ *
  * Hosts in shipped code are not the same as requests: the CSP (apps/server/src/app.ts WEB_CSP) is what stops the
  * browser from contacting anything but this origin (connect-src/script-src/img-src… 'self'), and the e2e suite fails
  * on any request to another origin (e2e/helpers.ts). This audit catches a dependency or a change that would ADD one.
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +117,28 @@ for (const f of files) {
 }
 for (const [h, where] of hosts)
   if (!(h in ALLOWED_HOSTS)) problems.push(`unexpected host ${h} in ${[...where].slice(0, 3).join(', ')}${where.size > 3 ? ' …' : ''}`);
+
+// 5. models: exactly the pinned files, byte for byte
+{
+  const MODELS_DIR = path.join(DIST, 'models');
+  if (fs.existsSync(MODELS_DIR)) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'apps/web/src/ml/manifest.json'), 'utf8'));
+    const pinned = new Map([
+      ...manifest.runtime.files.map((f) => [path.join(MODELS_DIR, 'ort', f.path), f]),
+      ...manifest.models.flatMap((m) => m.files.map((f) => [path.join(MODELS_DIR, m.id, f.path), f])),
+    ]);
+    for (const f of walk(MODELS_DIR)) {
+      const want = pinned.get(f);
+      if (!want) {
+        problems.push(`models/${path.relative(MODELS_DIR, f)}: not listed in src/ml/manifest.json`);
+        continue;
+      }
+      const bytes = fs.readFileSync(f);
+      if (bytes.length !== want.size || createHash('sha256').update(bytes).digest('hex') !== want.sha256)
+        problems.push(`models/${path.relative(MODELS_DIR, f)}: size or sha256 differs from src/ml/manifest.json`);
+    }
+  }
+}
 
 if (problems.length) {
   console.error(`[audit-web] ${problems.length} problem(s) in ${DIST}:`);

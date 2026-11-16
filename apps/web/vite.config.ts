@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
-import manifest from './src/voice/model-manifest.json' with { type: 'json' };
+import manifest from './src/ml/manifest.json' with { type: 'json' };
 
 // MATRA_VOICE_HARNESS=1 adds a standalone page for the on-device transcription E2E check (e2e/voice.spec.ts).
 // It is never part of a normal build.
@@ -17,7 +17,7 @@ const voiceHarness = process.env.MATRA_VOICE_HARNESS === '1' || process.env.MATR
  * so the fallback (if ever taken) still loads from our origin and the build ships one copy, not two.
  */
 function ortRuntimeFromModels(): Plugin {
-  const file = manifest.ort.webgpu.wasm;
+  const file = manifest.runtime.files.find((f) => f.role === 'webgpu-wasm')!.path;
   const ref = new RegExp(String.raw`new URL\(\s*["']` + file.replace(/\./g, '\\.') + String.raw`["']\s*,\s*import\.meta\.url\s*\)`, 'g');
   return {
     name: 'matra:ort-runtime-from-models',
