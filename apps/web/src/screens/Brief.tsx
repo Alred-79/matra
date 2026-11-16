@@ -14,7 +14,8 @@ import {
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { NOTICES } from '../lib/disclosures';
 import { finals, loadSpace } from '../lib/vault';
-import { commitmentsById, loadPrivate } from '../evidence/privateStore';
+import { commitmentsById, emptyPrivate, loadPrivate } from '../evidence/privateStore';
+import { buildExhibits, exhibitNumbersById } from '../evidence/exhibits';
 
 export function Brief() {
   const { api, session } = useRequiredSession();
@@ -34,7 +35,13 @@ export function Brief() {
     let ledgerEntry = chosen!.ledgerEntry;
     if (!ledgerEntry) ledgerEntry = (await api.getLedgerEntry(chosen!.meta.ledgerEntryId)).entry;
     // the salted fingerprints of her originals, when her private details open (never the salt, never a plain hash)
-    const exhibitFingerprints = await loadPrivate(api, session.masterKey).then((p) => (p.unreadable ? {} : commitmentsById(p.value.items))).catch(() => ({}));
+    const priv = await loadPrivate(api, session.masterKey).then((p) => (p.unreadable ? emptyPrivate() : p.value)).catch(() => emptyPrivate());
+    const exhibitFingerprints = commitmentsById(priv.items);
+    // the exhibit number printed beside each file is the one on her screen and in her exhibit list (one numbering)
+    const exhibitNumbers = await api
+      .listBlobs()
+      .then(({ blobs }) => exhibitNumbersById(buildExhibits(blobs, record?.evidence ?? [], priv.items)))
+      .catch(() => ({}) as Record<string, number>);
     return {
       recordId: chosen!.meta.id,
       recordContentHash: chosen!.meta.contentHash,
@@ -42,6 +49,7 @@ export function Brief() {
       generatedAt: new Date(),
       redactContactInfo: redact,
       ...(Object.keys(exhibitFingerprints).length > 0 && { exhibitFingerprints }),
+      exhibitNumbers,
     };
   }
 

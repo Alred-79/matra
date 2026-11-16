@@ -26,7 +26,7 @@ import { DATES_FOUND_IN_BUILD } from '../evidence/datesFlag';
 import { buildExhibits, type Exhibit } from '../evidence/exhibits';
 import { BlurredImage, ExhibitSection, OcrControl, RedactControl, readableType } from '../evidence/EvidencePanels';
 import { FINGERPRINT_NOTE, IMPORT_FORMAT_NOTICE } from '../evidence/formats';
-import { emptyPrivate, loadPrivate, type PrivateEvidence, type PrivateItem } from '../evidence/privateStore';
+import { emptyPrivate, loadPrivate, originalBlobIds, type PrivateEvidence, type PrivateItem } from '../evidence/privateStore';
 
 interface Uploaded {
   item: EvidenceItem;
@@ -197,7 +197,7 @@ export function Evidence() {
   const priv = existing.data?.priv ?? emptyPrivate();
   const canKeepOriginal = existing.data?.canKeepOriginal ?? false;
   // a kept original is a second file that belongs to the file it came from, so it is not listed on its own
-  const originalIds = new Set(Object.values(priv.items).flatMap((p) => (p.originalBlobId ? [p.originalBlobId] : [])));
+  const originalIds = originalBlobIds(priv.items, existing.data?.blobs ?? []);
   const exhibits = buildExhibits(existing.data?.blobs ?? [], existing.data?.meta ?? [], priv.items);
   const exhibitByBlob = new Map(exhibits.map((e) => [e.blobId, e]));
 

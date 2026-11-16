@@ -5,13 +5,19 @@
  *   2. read what the file says about itself (size in pixels, camera fields) and flag a likely screenshot (./screenshot.ts)
  *   3. strip hidden details if the type can be stripped (JPEG, PNG, WebP only: lib/metadata.ts), hash the copy
  *   4. if she chose to keep the original and it differs from the copy: encrypt it as a second file (off by default)
- *   5. save the plain hash and the salt in her PRIVATE evidence slot, then encrypt the copy and upload it with ONLY the
- *      commitment (the plain hash and the salt never leave her device unencrypted)
+ *   5. save the plain hash and the salt in her PRIVATE evidence slot, first, together with a RESERVATION for the original
+ *      (the hash of its ciphertext), then upload the original, then link it (originalBlobId) in the slot, then encrypt the
+ *      copy and upload it with ONLY the commitment (the plain hash and the salt never leave her device unencrypted)
+ *
+ * There is no way to delete a file once it is on the server (blobs are write-once; the only route that removes any is
+ * deleting the whole account), so a stored original can never be "taken back". The reservation is what stops it becoming a
+ * stray: if the upload went through but the link could not be saved, the blob is still recognised as this file's original
+ * (originalBlobIds), is not listed as an exhibit, and she is told plainly that a copy may still be stored.
  *
  * It does not interpret the file: no caption, no objects, no faces.
  */
-import { encryptBlob, generateContentKey, randomId, wrapKeyWithMaster } from '@matra/crypto';
-import type { EvidenceItem, EvidenceKind, LedgerEntry } from '@matra/shared';
+import { encryptBlob, generateContentKey, randomId, sha256Hex, wrapKeyWithMaster } from '@matra/crypto';
+import type { EvidenceItem, EvidenceKind, LedgerEntry, WrappedKey } from '@matra/shared';
 import type { ApiClient } from '../api/client';
 import { mirror } from '../dev/mirror';
 import { stripMetadata } from '../lib/metadata';
@@ -34,6 +40,12 @@ export function evidenceKindFor(file: { type: string; name: string }, screenshot
 
 /** Said whenever she asked to keep the original and it was not kept: she may be about to delete the one on her phone. */
 export const ORIGINAL_NOT_KEPT = ' Your original was NOT kept here either, so please keep it on your device.';
+/**
+ * Said when the original went up but could not be linked to its file: it cannot be taken off the server from here, so she is
+ * told a locked copy may be there. (For advocates to review.)
+ */
+export const ORIGINAL_MAY_BE_STORED =
+  ' A locked copy of your original may still be stored in your space. Only you can open it, it is not shared, and it is listed with this file in your export, but this version of Matra cannot remove it.';
 
 export interface ImportOptions {
   description?: string;
@@ -59,6 +71,7 @@ export interface UploadedEvidence {
   commitmentEntry?: LedgerEntry;
 }
 
+const omitPending = ({ originalPending: _p, ...rest }: PrivateItem): PrivateItem => rest;
 const bytesOf = async (b: Blob) => new Uint8Array(await b.arrayBuffer());
 
 async function encryptForUpload(bytes: Uint8Array, masterKey: CryptoKey) {
@@ -102,7 +115,6 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
     `Encrypted here. The server gets the ciphertext and a scrambled (salted) commitment, never the file's plain hash or its name.`,
   );
 
-  let originalBlobId: string | undefined;
   const importedAt = new Date().toISOString();
   let priv: PrivateItem | null = null;
   let finalNote = privateNote;
@@ -119,24 +131,54 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
       ...(DATES_FOUND_IN_BUILD && facts?.exifDates.length && { metadataDates: facts.exifDates }),
       ...(opts.derivedFrom && { derivedFrom: opts.derivedFrom }),
     };
+    // Her original, encrypted now so that the reservation can name it BEFORE anything is uploaded.
+    let kept: { ct: Uint8Array; wrapped: WrappedKey } | undefined;
+    if (keepOriginal) {
+      try {
+        kept = await encryptForUpload(originalBytes, masterKey);
+        priv = { ...priv, originalPending: { ciphertextSha256: await sha256Hex(kept.ct) } };
+      } catch (e) {
+        kept = undefined;
+        finalNote = `We couldn’t keep the original (${(e as Error).message}).${ORIGINAL_NOT_KEPT}`;
+      }
+    }
     try {
-      await setPrivateItem(api, masterKey, id, priv);
+      await setPrivateItem(api, masterKey, id, priv); // the reservation (and the commitment's salt) first
     } catch (e) {
       // not saved: do not commit to something she could not open, and do not keep an original she could not find again
       priv = null;
       return finish(undefined, `We couldn’t save the private fingerprint of this file’s original (${(e as Error).message}).${wantsOriginal ? ORIGINAL_NOT_KEPT : ''} The file itself is added.`);
     }
-    if (keepOriginal) {
+    if (kept && priv) {
+      let uploaded: string | undefined;
       try {
-        const e = await encryptForUpload(originalBytes, masterKey);
-        originalBlobId = (await api.uploadBlob(e.ct, e.wrapped)).blob.id;
-        priv = { ...priv, originalBlobId };
-        await setPrivateItem(api, masterKey, id, priv);
+        uploaded = (await api.uploadBlob(kept.ct, kept.wrapped)).blob.id;
       } catch (e) {
-        // the original may have gone up but could not be linked to this file, so it is not offered; say so
-        const { originalBlobId: _unlinked, ...withoutOriginal } = priv;
-        priv = withoutOriginal;
+        // nothing went up, so nothing is stored; take the reservation back (if that fails it names no blob, which is harmless)
+        const { originalPending: _reserved, ...withoutReservation } = priv;
+        priv = withoutReservation;
+        await setPrivateItem(api, masterKey, id, priv).catch(() => undefined);
         finalNote = `We couldn’t keep the original (${(e as Error).message}).${ORIGINAL_NOT_KEPT}`;
+      }
+      if (uploaded) {
+        const linked: PrivateItem = { ...omitPending(priv), originalBlobId: uploaded };
+        let linkError: Error | undefined;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            await setPrivateItem(api, masterKey, id, linked);
+            linkError = undefined;
+            break;
+          } catch (e) {
+            linkError = e as Error;
+          }
+        }
+        if (linkError) {
+          // Uploaded, not linked, and not removable. The reservation still names it, so it is not a stray; say so plainly.
+          // (`priv` keeps the reservation and no link: the screen offers no "download the original" for it.)
+          finalNote = `We couldn’t finish keeping the original (${linkError.message}).${ORIGINAL_MAY_BE_STORED}${ORIGINAL_NOT_KEPT}`;
+        } else {
+          priv = linked;
+        }
       }
     }
   }

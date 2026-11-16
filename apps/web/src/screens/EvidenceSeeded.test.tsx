@@ -77,3 +77,50 @@ describe('Evidence: the screenshot badge and note follow either signal', () => {
     expect(within(row).getByTestId('screenshot-note')).toHaveTextContent(/Please keep the original messages on your phone too/);
   }, 60_000);
 });
+
+describe('Evidence: exhibit numbers on the screen', () => {
+  it('a file that cannot be traced to a file she has details for takes no number, and the exhibit list and the rows agree', async () => {
+    const base = fakeAuthFetch();
+    type Slot = { name: string; envelope: unknown; wrappedKey: unknown; version: string; updatedDay: string };
+    const slots = new Map<string, Slot>();
+    const blob = (id: string, createdAt: string, contentHash = 'h') => ({ id: id.repeat(32), ownerId: 'u', sizeBytes: 3, contentHash, createdAt, ledgerEntryId: `l${id}`, ownerWrappedKey: {} });
+    const PENDING = 'c'.repeat(64);
+    const blobs = [blob('1', '2026-11-01T00:00:00Z'), blob('2', '2026-11-02T00:00:00Z'), blob('3', '2026-11-02T00:00:01Z', PENDING), blob('4', '2026-11-03T00:00:00Z')];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://x');
+      const method = init?.method ?? 'GET';
+      if (url.pathname === '/api/vault/records' && method === 'GET') return json(200, { records: [] });
+      if (url.pathname.startsWith('/api/vault/slots/') && method === 'GET') return json(200, { slot: slots.get(url.pathname.split('/').pop()!) ?? null, draftMode: 'slot' });
+      if (url.pathname === '/api/vault/blobs' && method === 'GET') return json(200, { blobs });
+      return base.fetchImpl(input, init);
+    });
+    const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
+    await act(async () => {
+      await current!.register({ username: 'wren-nums', passphrase: 'acorn-otter-river-lilac-tulip-zebra', role: 'survivor', ageConfirmed18: true });
+    });
+    const s = current!.session!;
+    const mk = (id: string, name: string, blobId: string) => ({ id, kind: 'photo', fileName: name, mimeType: 'image/png', sizeBytes: 3, sha256: 'c'.repeat(64), blobId, metadataStripped: true });
+    const evidence = [mk('iA', 'receipt.png', blobs[1]!.id), mk('iB', 'Redacted copy of exhibit 1 - receipt.png', blobs[3]!.id)];
+    const draftName = await slotName(s.masterKey, 'draft');
+    const privName = await slotName(s.masterKey, 'evidence-private');
+    const at = '2026-11-16T00:00:00Z';
+    slots.set(draftName, { name: draftName, ...(await sealSlot({ kind: 'draft', slotVersion: 1, evidence, savedAt: at }, s.masterKey)), version: 'a'.repeat(32), updatedDay: '2026-11-16' } as Slot);
+    slots.set(privName, { name: privName, ...(await sealSlot({ kind: 'evidence-private', v: 1, savedAt: at, items: { iA: { originalPending: { ciphertextSha256: PENDING } }, iB: { derivedFrom: 'iA' } } }, s.masterKey)), version: 'a'.repeat(32), updatedDay: '2026-11-16' } as Slot);
+    rerender(
+      <Harness fetchImpl={fetchImpl as unknown as typeof fetch}>
+        <MemoryRouter>
+          <Evidence />
+        </MemoryRouter>
+      </Harness>,
+    );
+    expect(await screen.findByTestId('file-1', {}, { timeout: 15_000 })).toHaveTextContent(/1\. receipt\.png/);
+    expect(screen.getByTestId('file-2')).toHaveTextContent(/2\. Redacted copy of exhibit 1/);
+    expect(screen.queryByTestId('file-3')).toBeNull(); // the unnamed file and the unlinked original take no number
+    const table = screen.getByTestId('exhibit-list');
+    expect(within(table).getByTestId('exhibit-row-1')).toHaveTextContent('receipt.png');
+    expect(within(table).getByTestId('exhibit-row-2')).toHaveTextContent('Redacted copy of exhibit 1');
+    expect(within(table).queryByTestId('exhibit-row-3')).toBeNull();
+    // the unlinked original is not listed as a file of its own, the unnamed one still is (as a locked file, no number)
+    expect(within(screen.getByTestId('evidence-in-space')).getAllByText('Locked file')).toHaveLength(1);
+  }, 60_000);
+});

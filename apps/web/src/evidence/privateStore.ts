@@ -47,6 +47,12 @@ export interface PrivateItem {
   screenshotLikely?: boolean;
   /** the second encrypted file holding her unstripped original, when she chose to keep it (off by default) */
   originalBlobId?: string;
+  /**
+   * Written BEFORE the original is uploaded: the SHA-256 of its ciphertext (what the server records as the blob's content
+   * hash). If the upload goes through but linking `originalBlobId` fails, this is how that blob is still recognised as this
+   * file's original rather than as a stray. Dropped once `originalBlobId` is saved.
+   */
+  originalPending?: { ciphertextSha256: string };
   /** set on a redacted copy: the id of the exhibit it was made from (the original is never changed) */
   derivedFrom?: string;
   /** date strings the original file's metadata held, as written (kept only in a build with "dates found in your files") */
@@ -124,6 +130,7 @@ function sanitize(v: unknown): PrivateEvidence | null {
       ...(typeof raw.originalType === 'string' && { originalType: raw.originalType }),
       ...(typeof raw.importedAt === 'string' && { importedAt: raw.importedAt }),
       ...(typeof raw.originalBlobId === 'string' && { originalBlobId: raw.originalBlobId }),
+      ...(isObject(raw.originalPending) && isHex64(raw.originalPending.ciphertextSha256) && { originalPending: { ciphertextSha256: raw.originalPending.ciphertextSha256 } }),
       ...(ocr && { ocr }),
     };
   }
@@ -186,6 +193,21 @@ export const setPrivateOcr = (api: ApiClient, masterKey: CryptoKey, itemId: stri
   updatePrivate(api, masterKey, (cur) => {
     return { ...cur, items: { ...cur.items, [itemId]: { ...cur.items[itemId], ocr } } };
   });
+
+/**
+ * Blobs that are kept originals of her files: the ones an item links (`originalBlobId`), and the ones an item reserved
+ * (`originalPending`) whose link was never saved. Matched by the blob's content hash.
+ */
+export function originalBlobIds(items: Readonly<Record<string, PrivateItem>>, blobs: ReadonlyArray<{ id: string; contentHash?: string }>): Set<string> {
+  const out = new Set<string>();
+  const pending = new Set<string>();
+  for (const p of Object.values(items)) {
+    if (p.originalBlobId) out.add(p.originalBlobId);
+    if (p.originalPending) pending.add(p.originalPending.ciphertextSha256);
+  }
+  for (const b of blobs) if (b.contentHash && pending.has(b.contentHash)) out.add(b.id);
+  return out;
+}
 
 /** Evidence item id -> salted commitment, for the PDF's Evidence Inventory (never the salt, never a plain hash). */
 export const commitmentsById = (items: Readonly<Record<string, PrivateItem>>): Record<string, string> =>

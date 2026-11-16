@@ -54,6 +54,13 @@ function safeMethods(r: IntakeRecord): string {
  * Pure function: the structured content of the Incident Summary in the Survivor's Own Words.
  * Survivor-authored text is carried through byte-for-byte (never trimmed, rewritten or summarised).
  */
+/** The evidence rows in exhibit-number order (numbered first, the rest after in their own order), when numbers are given. */
+function orderedEvidence<T extends { id: string }>(evidence: readonly T[], numbers?: Record<string, number>): T[] {
+  if (!numbers) return [...evidence];
+  const n = (e: T) => numbers[e.id] ?? Number.POSITIVE_INFINITY;
+  return evidence.map((e, i) => ({ e, i })).sort((a, b) => n(a.e) - n(b.e) || a.i - b.i).map((x) => x.e);
+}
+
 export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): BriefSection[] {
   const r = record;
   const out: BriefSection[] = [];
@@ -316,9 +323,9 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
             { header: 'Description', width: 0.25 }, { header: 'Captured', width: 0.13 },
             { header: 'Size', width: 0.09 }, { header: 'Metadata stripped', width: 0.12 },
           ],
-          rows: r.evidence.map((e, i) => ({
+          rows: orderedEvidence(r.evidence, opts.exhibitNumbers).map((e, i) => ({
             cells: [
-              String(i + 1), e.fileName || NOT_PROVIDED, EVIDENCE_KIND_LABELS[e.kind] ?? e.kind, orNP(e.description),
+              opts.exhibitNumbers ? (opts.exhibitNumbers[e.id] !== undefined ? String(opts.exhibitNumbers[e.id]) : '–') : String(i + 1), e.fileName || NOT_PROVIDED, EVIDENCE_KIND_LABELS[e.kind] ?? e.kind, orNP(e.description),
               formatDate(e.capturedAt), formatBytes(e.sizeBytes), e.metadataStripped ? 'Yes' : 'No',
             ],
             detail: opts.exhibitFingerprints?.[e.id]

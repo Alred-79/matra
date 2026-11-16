@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidenceItem } from '@matra/shared';
-import { buildExhibits, csvCell, exhibitListCsv, fingerprintsById, redactedCopyDescription, redactedCopyLabel } from './exhibits';
+import { buildExhibits, csvCell, exhibitListCsv, exhibitNumbersById, fingerprintsById, redactedCopyDescription, redactedCopyLabel } from './exhibits';
 import { EvidenceIndex, fold } from './search';
-import type { PrivateItem } from './privateStore';
+import { originalBlobIds, type PrivateItem } from './privateStore';
 
 const item = (id: string, name: string, over: Partial<EvidenceItem> = {}): EvidenceItem => ({
   id, kind: 'photo', fileName: name, mimeType: 'image/png', sizeBytes: 1500, sha256: 'a'.repeat(64), blobId: `b-${id}`, metadataStripped: true, ...over,
@@ -83,12 +83,36 @@ describe('local search', () => {
   });
 });
 
-describe('exhibit list for the export: files whose details were never saved', () => {
-  it('lists them as "(name not saved)" only when asked, and never as a normal exhibit', () => {
-    const blobs = [blob('i1', '2026-11-01T10:00:00Z'), { id: 'b-orphan', createdAt: '2026-11-02T10:00:00Z', sizeBytes: 77 }];
-    const items = [item('i1', 'a.png')];
-    expect(buildExhibits(blobs, items, {}).map((e) => e.fileName)).toEqual(['a.png']);
-    const all = buildExhibits(blobs, items, {}, { includeUnnamed: true });
-    expect(all.map((e) => [e.number, e.fileName, e.sizeBytes])).toEqual([[1, 'a.png', 1500], [2, '(name not saved)', 77]]);
+describe('one numbering: files that cannot be traced to an item take no number', () => {
+  it('leaves them out of the list, so they never take a number away from a real file', () => {
+    const blobs = [blob('i1', '2026-11-01T10:00:00Z'), { id: 'b-orphan', createdAt: '2026-11-02T10:00:00Z', sizeBytes: 77 }, blob('i2', '2026-11-03T10:00:00Z')];
+    const list = buildExhibits(blobs, [item('i1', 'a.png'), item('i2', 'b.png')], {});
+    expect(list.map((e) => [e.number, e.fileName])).toEqual([[1, 'a.png'], [2, 'b.png']]);
+    expect(list.every((e) => e.blobId !== 'b-orphan')).toBe(true);
+    // the old "include unnamed" option is gone: the function takes no such switch
+    expect(buildExhibits.length).toBe(3);
+  });
+
+  it('does not list an original that went up but was never linked (it is recognised by the hash reserved before it was sent)', () => {
+    const H = 'e'.repeat(64);
+    const blobs = [blob('i1', '2026-11-01T10:00:00Z'), { id: 'b-stray-orig', createdAt: '2026-11-01T10:00:01Z', sizeBytes: 9, contentHash: H }, blob('i2', '2026-11-02T10:00:00Z')];
+    const list = buildExhibits(blobs, [item('i1', 'a.png'), item('i2', 'b.png')], { i1: { originalPending: { ciphertextSha256: H } } });
+    expect(list.map((e) => e.number)).toEqual([1, 2]);
+    expect(originalBlobIds({ i1: { originalPending: { ciphertextSha256: H } } }, blobs).has('b-stray-orig')).toBe(true);
+    // an unreserved blob with a different hash is not mistaken for it
+    expect(originalBlobIds({ i1: { originalPending: { ciphertextSha256: 'f'.repeat(64) } } }, blobs).has('b-stray-orig')).toBe(false);
+  });
+
+  it('resolves derivedFrom against this same list: a redacted copy names the exhibit that is on the screen', () => {
+    // an unnamed blob sits before both files: it must not shift the number the copy points at
+    const blobs = [{ id: 'b-orphan', createdAt: '2026-10-31T10:00:00Z', sizeBytes: 5 }, blob('i1', '2026-11-01T10:00:00Z'), blob('i2', '2026-11-02T10:00:00Z'), blob('i3', '2026-11-03T10:00:00Z')];
+    const items = [item('i1', 'receipt.png'), item('i2', 'other.png'), item('i3', 'copy.png')];
+    const list = buildExhibits(blobs, items, { i3: { derivedFrom: 'i1' } });
+    expect(list.map((e) => [e.number, e.fileName])).toEqual([[1, 'receipt.png'], [2, 'other.png'], [3, 'copy.png']]);
+    expect(list[2]!.redactedCopyOf).toBe(1);
+    expect(list[0]!.redactedCopyOf).toBeUndefined();
+    // a copy of a file that is not in the list points at nothing rather than at a wrong number
+    expect(buildExhibits(blobs, items, { i3: { derivedFrom: 'gone' } })[2]!.redactedCopyOf).toBeUndefined();
+    expect(exhibitNumbersById(list)).toEqual({ i1: 1, i2: 2, i3: 3 });
   });
 });

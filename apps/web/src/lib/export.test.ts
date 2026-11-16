@@ -7,6 +7,8 @@ import { MatchingApiClient } from '../api/matching';
 import { buildDataExport } from './export';
 import { storedRecord, vaultApi } from '../test/fakeVault';
 import { sampleRecord } from '../brief/fixtures';
+import { briefSections } from '../brief';
+import { buildExhibits, exhibitNumbersById } from '../evidence/exhibits';
 
 /** Pull every file out of a STORE zip (central directory walk). */
 function unzip(zip: Uint8Array): Map<string, Uint8Array> {
@@ -174,3 +176,66 @@ describe('buildDataExport: the evidence reader’s lists', () => {
   });
 });
 
+
+describe('one numbering: the screen, the export, the CSV and the PDF agree on every exhibit number', () => {
+  it('with an unnamed file, an original whose link was never saved, and a redacted copy', async () => {
+    g.__MATRA_MATCHING__ = false;
+    const { masterKey } = await deriveKeys('numbering test passphrase', newKdfSalt(), 1000);
+    const bytes = new TextEncoder().encode('stored');
+    const makeBlob = async (id: string, createdAt: string, contentHash = 'x') => {
+      const key = await generateContentKey();
+      return { blob: { id, ownerId: 'u', sizeBytes: 0, contentHash, createdAt, ledgerEntryId: `l-${id}`, ownerWrappedKey: await wrapKeyWithMaster(key, masterKey) } as BlobMeta, ct: await encryptBlob(bytes, key) };
+    };
+    const PENDING = 'd'.repeat(64);
+    const made = [
+      await makeBlob('1'.repeat(32), '2026-08-01T00:00:00Z'), // unnamed: another device saved its draft first
+      await makeBlob('2'.repeat(32), '2026-08-02T00:00:00Z'), // receipt
+      await makeBlob('3'.repeat(32), '2026-08-02T00:00:01Z', PENDING), // its original: uploaded, link never saved
+      await makeBlob('4'.repeat(32), '2026-08-03T00:00:00Z'), // redacted copy of the receipt
+    ];
+    const mk = async (id: string, fileName: string, blobId: string) => ({ id, kind: 'photo', fileName, mimeType: 'image/png', sizeBytes: bytes.length, sha256: await sha256Hex(bytes), blobId, metadataStripped: true });
+    const items = [await mk('iA', 'receipt.png', made[1]!.blob.id), await mk('iB', 'Redacted copy of exhibit 1 - receipt.png', made[3]!.blob.id)];
+    const privItems = { iA: { commitment: 'a'.repeat(64), originalPending: { ciphertextSha256: PENDING } }, iB: { commitment: 'b'.repeat(64), derivedFrom: 'iA' } };
+    const draft = { name: await slotName(masterKey, 'draft'), ...(await sealSlot({ kind: 'draft', slotVersion: 1, evidence: items, savedAt: '2026-09-01T00:00:00Z' }, masterKey)), version: '4'.repeat(32), updatedDay: '2026-09-01' };
+    const priv = { name: await slotName(masterKey, 'evidence-private'), ...(await sealSlot({ kind: 'evidence-private', v: 1, savedAt: 'x', items: privItems }, masterKey)), version: '5'.repeat(32), updatedDay: '2026-09-01' };
+    const blobs = made.map((m) => m.blob);
+    const fake = {
+      listRecords: async () => ({ records: [] }),
+      getRecord: async () => ({ record: undefined }),
+      getSlot: async (name: string) => ({ slot: name === draft.name ? draft : name === priv.name ? priv : null, draftMode: 'slot' }),
+      getLedgerEntry: async () => ({ entry: undefined }),
+      listBlobs: async () => ({ blobs }),
+      downloadBlob: async (id: string) => made.find((m) => m.blob.id === id)!.ct,
+      listShares: async () => ({ shares: [] }),
+      listAudit: async () => ({ events: [] }),
+    } as unknown as ApiClient;
+
+    // the screen: buildExhibits over the same blobs, items and private details (screens/Evidence.tsx)
+    const onScreen = buildExhibits(blobs, items as never, privItems as never);
+    expect(onScreen.map((e) => [e.number, e.id])).toEqual([[1, 'iA'], [2, 'iB']]);
+    expect(onScreen[1]!.redactedCopyOf).toBe(1);
+
+    // the export and its CSV
+    const files = unzip((await buildDataExport(fake, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'))).zip);
+    const text = (n: string) => new TextDecoder().decode(files.get(n)!);
+    const csvRows = text('evidence/exhibit-list.csv').trimEnd().split('\r\n').slice(1);
+    expect(csvRows.map((r) => r.split('","')[0]!.replace(/^"/, ''))).toEqual(onScreen.map((e) => String(e.number)));
+    expect(csvRows).toHaveLength(2);
+    expect(csvRows[1]).toContain('Redacted copy of exhibit 1');
+    const details = JSON.parse(text('evidence/private-details.json')) as { files: Array<{ exhibit: number; fileName: string; redactedCopyOf?: number }> };
+    expect(details.files.map((f) => f.exhibit)).toEqual(onScreen.map((e) => e.number));
+    expect(details.files[1]!.redactedCopyOf).toBe(1); // points at the receipt, exhibit 1, whatever else is in the archive
+    // the unnamed file takes no number and is kept apart; the unlinked original is named as the original it is
+    expect([...files.keys()].filter((n) => n.startsWith('evidence/unattributed/'))).toEqual([`evidence/unattributed/001-${'1'.repeat(32)}.bin`]);
+    expect([...files.keys()].some((n) => n.endsWith('original-of-receipt.png'))).toBe(true);
+    expect(text('evidence/exhibit-list.csv')).not.toContain('name not saved');
+    const manifest = JSON.parse(text('evidence/manifest.json')) as { files?: Array<{ blobId: string; attributedToAFile?: boolean }> } | Array<{ blobId: string; attributedToAFile?: boolean }>;
+    const entries = Array.isArray(manifest) ? manifest : (manifest.files ?? []);
+    expect(entries.filter((m) => m.attributedToAFile === false).map((m) => m.blobId)).toEqual(['1'.repeat(32)]);
+
+    // the PDF: its "#" column is the same number for the same file
+    const sections = briefSections({ ...sampleRecord, evidence: [items[1]!, items[0]!] as never }, { exhibitNumbers: exhibitNumbersById(onScreen) });
+    const table = sections.find((s) => s.id === 'evidence')!.blocks.find((b) => b.kind === 'table') as { rows: Array<{ cells: string[] }> };
+    expect(table.rows.map((r) => [r.cells[0], r.cells[1]])).toEqual(onScreen.map((e) => [String(e.number), e.fileName]));
+  });
+});

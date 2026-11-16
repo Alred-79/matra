@@ -3,7 +3,8 @@ import { sealSlot, sha256Hex, slotName } from '@matra/crypto';
 import { setDraftMode } from '../lib/draftSlot';
 import { commit, hashOriginal, isHex64, newSalt, verifyCommitment, verifyOriginal } from './commitment';
 import { importEvidence } from './importFile';
-import { EVIDENCE_PRIVATE_SLOT, loadPrivate } from './privateStore';
+import { buildExhibits } from './exhibits';
+import { EVIDENCE_PRIVATE_SLOT, loadPrivate, originalBlobIds } from './privateStore';
 import { everythingSent, fakeApi, testKeys } from './testkit.test-util';
 
 vi.mock('../lib/metadata', async (orig) => {
@@ -213,6 +214,90 @@ describe('importing a file (PR 31)', () => {
       expect(r.privateNote).toMatch(NOT_KEPT);
       expect(r.details?.originalBlobId).toBeUndefined();
       expect(r.details?.commitment).toBe(uploads[0]!.commitment);
+    });
+
+    describe('the original is uploaded but cannot be linked to its file (there is no way to delete a stored file)', () => {
+      const MAY_BE_STORED = /A locked copy of your original may still be stored in your space.*cannot remove it/;
+
+      /** putSlot calls 1.. : the reservation is the first; fail the calls in `failCalls` */
+      const failingPuts = (api: ReturnType<typeof fakeApi>['api'], failCalls: number[]) => {
+        const real = api.putSlot.bind(api);
+        let n = 0;
+        (api as unknown as { putSlot: typeof real }).putSlot = async (name, req) => {
+          if (failCalls.includes(++n)) throw new Error('could not save');
+          return real(name, req);
+        };
+      };
+
+      it('the slot entry is reserved BEFORE anything of the original is uploaded, and the link replaces the reservation', async () => {
+        const { masterKey } = await testKeys();
+        const { api, uploads } = fakeApi();
+        const real = api.uploadBlob.bind(api);
+        let reservedAtUpload: unknown;
+        (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
+          if (uploads.length === 0) reservedAtUpload = Object.values((await loadPrivate(api, masterKey)).value.items)[0]; // the first upload is the original
+          return real(ct, wk, c);
+        };
+        const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+        expect(reservedAtUpload).toMatchObject({ originalPending: { ciphertextSha256: await sha256Hex(uploads[0]!.ct) } });
+        expect((reservedAtUpload as { originalBlobId?: string }).originalBlobId).toBeUndefined();
+        const saved = Object.values((await loadPrivate(api, masterKey)).value.items)[0]!;
+        expect(saved.originalBlobId).toBe(String(1).padStart(32, '0'));
+        expect(saved.originalPending).toBeUndefined(); // linked: the reservation is gone
+        expect(r.privateNote).toBeNull();
+        expect(r.details?.originalBlobId).toBe(saved.originalBlobId);
+      });
+
+      it('a link that fails once is tried again and the original is kept', async () => {
+        const { masterKey } = await testKeys();
+        const { api } = fakeApi();
+        failingPuts(api, [2]); // reservation ok, first link fails, second link goes through
+        const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+        expect(r.details?.originalBlobId).toBeDefined();
+        expect(r.privateNote).toBeNull();
+      });
+
+      it('the link keeps failing: she is told a copy may still be stored, it is still recognised as the file’s original, and it is not an exhibit', async () => {
+        const { masterKey } = await testKeys();
+        const { api, uploads } = fakeApi();
+        failingPuts(api, [2, 3]);
+        const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+        expect(uploads).toHaveLength(2); // the original went up, then the file
+        expect(r.privateNote).toMatch(MAY_BE_STORED);
+        expect(r.privateNote).toMatch(NOT_KEPT);
+        expect(r.details?.originalBlobId).toBeUndefined(); // nothing to download or call kept
+        // what the server's list would show for the stored original: its content hash is the one reserved beforehand
+        const originalBlob = { id: String(1).padStart(32, '0'), createdAt: '2026-11-16T00:00:00.000Z', sizeBytes: uploads[0]!.ct.length, contentHash: await sha256Hex(uploads[0]!.ct) };
+        const copyBlob = { id: r.item.blobId!, createdAt: '2026-11-16T00:00:01.000Z', sizeBytes: 5, contentHash: 'c'.repeat(64) };
+        const priv = (await loadPrivate(api, masterKey)).value.items;
+        expect(originalBlobIds(priv, [originalBlob, copyBlob])).toEqual(new Set([originalBlob.id]));
+        expect(buildExhibits([originalBlob, copyBlob], [r.item], priv).map((e) => [e.number, e.blobId])).toEqual([[1, copyBlob.id]]);
+      });
+
+      it('the original’s upload fails: nothing is stored, the reservation is taken back, and she is told', async () => {
+        const { masterKey } = await testKeys();
+        const { api, uploads } = fakeApi();
+        const real = api.uploadBlob.bind(api);
+        let n = 0;
+        (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
+          if (++n === 1) throw new Error('upload failed');
+          return real(ct, wk, c);
+        };
+        const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+        expect(uploads).toHaveLength(1);
+        expect(r.privateNote).toMatch(NOT_KEPT);
+        expect(r.privateNote).not.toMatch(MAY_BE_STORED);
+        expect(Object.values((await loadPrivate(api, masterKey)).value.items)[0]!.originalPending).toBeUndefined();
+      });
+
+      it('an original is only ever uploaded after its reservation was saved: if the reservation fails, no original goes up', async () => {
+        const { masterKey } = await testKeys();
+        const { api, uploads } = fakeApi();
+        failingPuts(api, [1]);
+        const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+        expect(uploads).toHaveLength(1); // only the file itself
+        expect(r.privateNote).toMatch(NOT_KEPT);
+      });
     });
 
     it('says nothing about an original she did not ask to keep, or one that is kept as it is anyway', async () => {

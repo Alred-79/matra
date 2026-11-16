@@ -9,7 +9,7 @@
 import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { EVIDENCE_KIND_LABELS } from '../brief/format';
 import { formatBytes } from '../lib/vault';
-import type { PrivateItem } from './privateStore';
+import { originalBlobIds, type PrivateItem } from './privateStore';
 
 export interface Exhibit {
   number: number;
@@ -27,33 +27,38 @@ export interface Exhibit {
   description?: string;
   capturedAt?: string;
   screenshotLikely: boolean;
-  /** the exhibit this one is a redacted copy of */
+  /** the item id of the file this one is a redacted copy of */
   derivedFrom?: string;
+  /** that file's exhibit number in THIS list (absent when the file is not in the list) */
+  redactedCopyOf?: number;
   ocrText?: string;
 }
 
-type BlobLike = Pick<BlobMeta, 'id' | 'createdAt' | 'sizeBytes'>;
+type BlobLike = Pick<BlobMeta, 'id' | 'createdAt' | 'sizeBytes'> & Partial<Pick<BlobMeta, 'contentHash'>>;
 
-/** Files she has details for, in the order the server sealed them (blobs arrive oldest first), numbered from 1. */
+/**
+ * THE numbering. Every place that shows or prints an exhibit number (the Evidence screen, the exhibit list and its CSV, the
+ * data export, a redacted copy's label, the incident-summary PDF) takes it from this one function, called with the same
+ * blobs, her files' details and her private details. Nothing else counts.
+ *
+ * Her files in the order the server sealed them (blobs arrive oldest first), numbered from 1. A blob that cannot be traced
+ * to a file she has details for (another device saved its draft first, or an upload that was never finished) gets NO number
+ * and is not listed: it is not one of her exhibits, so it must not take a number away from one. A kept original (a second
+ * encrypted file) belongs to its file and is not an exhibit of its own. `derivedFrom` is turned into a number here, from this
+ * same list, so a redacted copy always names the exhibit the reader sees.
+ */
 export function buildExhibits(
   blobs: readonly BlobLike[],
   items: readonly EvidenceItem[],
   priv: Readonly<Record<string, PrivateItem>>,
-  /** the export lists a file whose details were never saved (another device saved its draft first) as "(name not saved)" */
-  opts: { includeUnnamed?: boolean } = {},
 ): Exhibit[] {
   const byBlob = new Map(items.filter((i) => i.blobId).map((i) => [i.blobId!, i]));
-  const keptOriginals = new Set(Object.values(priv).flatMap((p) => (p.originalBlobId ? [p.originalBlobId] : [])));
+  const originals = originalBlobIds(priv, blobs);
   const ordered = [...blobs].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
   const out: Exhibit[] = [];
   for (const b of ordered) {
     const item = byBlob.get(b.id);
-    if (keptOriginals.has(b.id)) continue;
-    if (!item) {
-      if (opts.includeUnnamed)
-        out.push({ number: out.length + 1, id: `unnamed-${b.id}`, blobId: b.id, fileName: '(name not saved)', addedAt: b.createdAt, kindLabel: 'Unknown', mimeType: 'unknown', sizeBytes: b.sizeBytes, fingerprint: '', screenshotLikely: false });
-      continue;
-    }
+    if (!item || originals.has(b.id)) continue;
     const p = priv[item.id];
     out.push({
       number: out.length + 1,
@@ -72,8 +77,15 @@ export function buildExhibits(
       ...(p?.ocr?.text && { ocrText: p.ocr.text }),
     });
   }
-  return out;
+  const numberOf = new Map(out.map((e) => [e.id, e.number]));
+  return out.map((e) => {
+    const n = e.derivedFrom ? numberOf.get(e.derivedFrom) : undefined;
+    return n === undefined ? e : { ...e, redactedCopyOf: n };
+  });
 }
+
+/** Item id -> exhibit number, for anything that prints a number beside a file (the PDF). */
+export const exhibitNumbersById = (list: readonly Exhibit[]): Record<string, number> => Object.fromEntries(list.map((e) => [e.id, e.number]));
 
 /** The commitments by item id, for the PDF's Evidence Inventory. */
 export const fingerprintsById = (list: readonly Exhibit[]): Record<string, string> =>

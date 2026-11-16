@@ -19,6 +19,12 @@ export interface BriefOptions {
    * in the Evidence Inventory when given. Never a plain hash of the original, and never the salt.
    */
   exhibitFingerprints?: Record<string, string>;
+  /**
+   * Evidence item id -> its exhibit number, from the one numbering (src/evidence/exhibits.ts buildExhibits), so the number
+   * printed here is the number on her screen and in her exhibit list. When given, rows are ordered by it and a file with no
+   * number shows "–"; when absent, rows are simply counted in the order of the record (callers with no file list).
+   */
+  exhibitNumbers?: Record<string, number>;
 }
 
 export interface BriefRow {

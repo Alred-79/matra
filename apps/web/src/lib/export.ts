@@ -51,6 +51,9 @@ evidence/manifest.json  One entry per evidence file: original name, type, size, 
                         recorded when you added it, and whether this copy still matches it.
 evidence/...            The evidence files themselves (as stored — with hidden details removed
                         where Matra could do that).
+evidence/unattributed/  Stored files that Matra cannot tie to a file in your list (for example when
+                        another device saved its details first). They are kept here so nothing is
+                        left out, but they have no exhibit number and are not in the exhibit list.
 evidence/exhibit-list.csv   Your files in the order you added them: number, name, date added, type, size
                         and a salted fingerprint of the original file you chose (if one was kept).
 evidence/private-details.json   What only you hold about each file: the fingerprint of the original, the
@@ -106,7 +109,10 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
   if (priv && !priv.unreadable)
     for (const [itemId, p] of Object.entries(priv.value.items)) {
       const parent = [...itemByBlob.values()].find((e) => e.id === itemId);
-      if (p.originalBlobId && parent) originalOf.set(p.originalBlobId, parent.fileName);
+      if (!parent) continue;
+      if (p.originalBlobId) originalOf.set(p.originalBlobId, parent.fileName);
+      // an original that went up but whose link was never saved: still recognised, by the hash reserved before it was sent
+      if (p.originalPending) for (const b of blobs) if (b.contentHash === p.originalPending.ciphertextSha256) originalOf.set(b.id, parent.fileName);
     }
 
   const entries: ZipEntry[] = [];
@@ -117,7 +123,9 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     i++;
     const item = itemByBlob.get(b.id);
     const originalFor = originalOf.get(b.id);
-    const name = `evidence/${String(i).padStart(3, '0')}-${safeFileName(originalFor ? `original-of-${originalFor}` : (item?.fileName ?? `${b.id}.bin`))}`;
+    // a blob tied to no file in her list is kept in the archive (nothing of hers is left out) but apart, and never numbered
+    const unattributed = !item && !originalFor;
+    const name = `evidence/${unattributed ? 'unattributed/' : ''}${String(i).padStart(3, '0')}-${safeFileName(originalFor ? `original-of-${originalFor}` : (item?.fileName ?? `${b.id}.bin`))}`;
     try {
       const key = await blobKeyFor(b, masterKey);
       const { bytes, hash, verified } = await openEvidence(api, key, b.id, item?.sha256);
@@ -128,6 +136,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
         sizeBytes: bytes.byteLength, sha256: hash, recordedSha256: item?.sha256, sha256Matches: verified,
         description: item?.description, capturedAt: item?.capturedAt, metadataStripped: item?.metadataStripped,
         addedToVaultAt: b.createdAt, ledgerEntryId: b.ledgerEntryId,
+        ...(unattributed && { attributedToAFile: false }),
       });
     } catch (e) {
       problems.push(`${item?.fileName ?? b.id}: could not be decrypted (${e instanceof Error ? e.message : 'unknown error'})`);
@@ -138,7 +147,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
   const evidenceFileCount = entries.length; // the evidence files themselves, before the lists below
   if (priv && !priv.unreadable) {
     const items = [...itemByBlob.values()];
-    const exhibits = buildExhibits(blobs, items, priv.value.items, { includeUnnamed: true });
+    const exhibits = buildExhibits(blobs, items, priv.value.items);
     // private details that match no file she has details for (another device saved first): kept so a ledgered commitment can still be opened
     const named = new Set(exhibits.map((e) => e.id));
     const unlisted = Object.entries(priv.value.items).filter(([id]) => !named.has(id));
@@ -163,7 +172,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
               ...(p?.originalSha256 && { originalSha256: p.originalSha256, salt: p.salt, saltedFingerprint: p.commitment }),
               ...(p?.importedAt && { addedAt: p.importedAt }),
               ...(p?.originalBlobId && { originalKept: true, originalFileBlobId: p.originalBlobId }),
-              ...(p?.derivedFrom && { redactedCopyOf: exhibits.find((x) => x.id === p.derivedFrom)?.number }),
+              ...(e.redactedCopyOf !== undefined && { redactedCopyOf: e.redactedCopyOf }),
               ...(p?.ocr && { textRead: p.ocr.text, textReadWith: p.ocr.engine, textReadAt: p.ocr.at }),
             };
           }),
