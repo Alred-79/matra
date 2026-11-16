@@ -130,6 +130,62 @@ describe('on-device text reading', () => {
     expect(f.sent.map((m) => m.action)).not.toContain('recognize');
   });
 
+  it('a wipe mid-job rejects the pending job, detaches the worker and keeps nothing (the worker is gone and never answers)', async () => {
+    const { env, model } = await setup();
+    // like a real terminated worker: once ended, it never replies again
+    let ended = false;
+    let handler: WorkerLike['onmessage'] = null;
+    const w: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      terminate: vi.fn(() => {
+        ended = true;
+      }),
+      postMessage(m: any) {
+        handler = w.onmessage; // the handler a late message would have reached
+        if (m.action === 'recognize') return wipeAll(); // she locks while the text is being read; no reply will come
+        queueMicrotask(() => {
+          if (!ended) w.onmessage?.({ data: { jobId: m.jobId, workerId: m.workerId, action: m.action, status: 'resolve', data: { ok: true } } });
+        });
+      },
+    };
+    const outcome = await Promise.race([
+      readTextFromImage(image, { env, model, spawnWorker: () => w, codeUrls: CODE }).then(
+        (r) => ({ resolved: r }),
+        (e) => ({ rejected: e }),
+      ),
+      new Promise((r) => setTimeout(() => r({ hung: true }), 1500)),
+    ]);
+    expect(outcome).toHaveProperty('rejected');
+    expect((outcome as { rejected: Error }).rejected).toBeInstanceOf(OcrUnavailableError);
+    expect(w.terminate).toHaveBeenCalled();
+    // nothing is retained: the worker no longer points back at this module, and a late answer is ignored
+    expect(w.onmessage).toBeNull();
+    expect(w.onerror).toBeNull();
+    expect(() => handler?.({ data: { jobId: 'job-4', status: 'resolve', data: { text: 'late secret words' } } })).not.toThrow();
+  });
+
+  it('a wipe also rejects every other job still waiting, and the engine ignores messages sent after it', async () => {
+    const { env, model } = await setup();
+    const f = fakeWorker('should never be read');
+    const seen: string[] = [];
+    const orig = f.w.postMessage.bind(f.w);
+    f.w.postMessage = (m: any) => {
+      seen.push(m.action);
+      if (m.action === 'load') {
+        // two jobs outstanding at once, then the wipe
+        f.w.onmessage?.({ data: { jobId: 'job-99', status: 'progress', data: {} } });
+        wipeAll();
+        return; // never answered
+      }
+      orig(m);
+    };
+    const err = await readTextFromImage(image, { env, model, spawnWorker: () => f.w, codeUrls: CODE }).catch((e) => e);
+    expect(err).toBeInstanceOf(OcrUnavailableError);
+    expect(seen).toEqual(['load']); // nothing sent after the wipe
+    expect(f.w.onmessage).toBeNull();
+  });
+
   it('the real manifest pins the OCR data and both code files, with a licence-checked npm source', () => {
     const m = modelById(OCR_MODEL_ID);
     expect(m.task).toBe('ocr');

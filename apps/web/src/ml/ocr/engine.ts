@@ -110,7 +110,7 @@ export interface ReadTextOptions {
 /** tesseract.js's OEM.LSTM_ONLY */
 const OEM_LSTM_ONLY = 1;
 
-/** Jobs sent to the worker script, one at a time, each answered once. */
+/** Jobs sent to the worker script, one at a time, each answered once; `abandon` settles and forgets all of them. */
 function jobs(w: WorkerLike, onProgress?: (data: { status?: string; progress?: number }) => void) {
   const pending = new Map<string, { resolve(v: any): void; reject(e: Error): void }>();
   let n = 0;
@@ -128,12 +128,21 @@ function jobs(w: WorkerLike, onProgress?: (data: { status?: string; progress?: n
     for (const p of pending.values()) p.reject(new Error(e?.message || 'the reader stopped'));
     pending.clear();
   };
-  return (action: string, payload: unknown): Promise<any> =>
+  const send = (action: string, payload: unknown): Promise<any> =>
     new Promise((resolve, reject) => {
       const jobId = `job-${n++}`;
       pending.set(jobId, { resolve, reject });
       w.postMessage({ workerId: 'matra-ocr', jobId, action, payload });
     });
+  /** A wipe: settle every waiting job with `err`, forget them, and stop listening to the worker. */
+  const abandon = (err: Error) => {
+    const waiting = [...pending.values()];
+    pending.clear();
+    w.onmessage = null;
+    w.onerror = null;
+    for (const p of waiting) p.reject(err);
+  };
+  return { send, abandon };
 }
 
 /** Read the text printed in one image. The words are the engine's, untouched. */
@@ -142,7 +151,7 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
   const model = opts.model ?? modelById(OCR_MODEL_ID, env.manifest);
   const code = opts.codeUrls ?? { worker: ocrWorkerUrl, core: ocrCoreUrl };
   assertOcrCodeUrls([code.worker, code.core], env.origin);
-  let data: Uint8Array;
+  let data: Uint8Array | null;
   try {
     data = await loadLanguageData(model, env, opts.onProgress);
   } catch (e) {
@@ -152,22 +161,28 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
   }
   opts.onProgress?.({ status: 'Starting the reader…' });
   let worker: WorkerLike | undefined;
-  // Lock, idle lock, sign-out and Quick exit stop a read in progress: the worker is ended and nothing is returned or saved.
+  let abandonJobs: ((e: Error) => void) | undefined;
+  // Lock, idle lock, sign-out and Quick exit stop a read in progress: the worker is ended, every waiting job is rejected
+  // (a terminated worker never answers, so nothing else would settle them), its handlers are dropped and the language data
+  // is let go. Nothing is returned or saved.
   let stopped = false;
   const stopOnWipe = onWipe(() => {
     stopped = true;
+    data = null;
     try {
       worker?.terminate();
     } catch {
       /* already gone */
     }
+    abandonJobs?.(new OcrUnavailableError('it was stopped when the screen was locked'));
   });
   try {
     // a classic worker started from our own build file (the CSP has no blob: worker source)
     worker = opts.spawnWorker ? opts.spawnWorker(code.worker) : (new Worker(code.worker) as unknown as WorkerLike);
-    const rawSend = jobs(worker, (m) => {
+    const { send: rawSend, abandon } = jobs(worker, (m) => {
       if (m.status === 'recognizing text') opts.onProgress?.({ status: 'Reading the text…', fraction: m.progress });
     });
+    abandonJobs = abandon;
     const send = async (action: string, payload: unknown) => {
       if (stopped) throw new OcrUnavailableError('it was stopped when the screen was locked');
       return rawSend(action, payload);
@@ -175,7 +190,7 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
     // the engine's code: exactly the file we built in (a path ending .js is used as it is: no CDN default, no second choice)
     await send('load', { options: { lstmOnly: true, corePath: new URL(code.core, env.origin).href, logging: false } });
     // the language data goes in as the bytes we checked; the engine makes no request and keeps no copy of its own
-    await send('loadLanguage', { langs: [{ code: 'eng', data }], options: { cacheMethod: 'none', gzip: true, lstmOnly: true } });
+    await send('loadLanguage', { langs: [{ code: 'eng', data: data! }], options: { cacheMethod: 'none', gzip: true, lstmOnly: true } });
     await send('initialize', { langs: 'eng', oem: OEM_LSTM_ONLY, config: {} });
     opts.onProgress?.({ status: 'Reading the text…', fraction: 0 });
     const result = await send('recognize', { image: new Uint8Array(await (await forEngine(image)).arrayBuffer()), options: {}, output: { text: true } });
@@ -187,10 +202,16 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
     throw new OcrUnavailableError((e as Error)?.message);
   } finally {
     stopOnWipe();
+    data = null;
+    abandonJobs = undefined;
     try {
       worker?.terminate();
     } catch {
       /* already gone */
+    }
+    if (worker) {
+      worker.onmessage = null;
+      worker.onerror = null;
     }
   }
 }
