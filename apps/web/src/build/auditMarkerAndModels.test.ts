@@ -60,6 +60,16 @@ describe('build audit: the span-marker is left out of a default build', () => {
       expect(code).toContain(`/assets/${glueName}`);
       expect(code).not.toContain('/models/ort/ort-wasm-simd-threaded.mjs');
     }
+    // licence texts and the attribution notice ship with the app, and the audit fails without them
+    for (const f of ['NOTICE.txt', 'Apache-2.0.txt', 'MIT-onnxruntime-web.txt']) expect(fs.existsSync(path.join(out, 'licenses', f)), f).toBe(true);
+    const notice = fs.readFileSync(path.join(out, 'licenses/NOTICE.txt'), 'utf8');
+    for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'onnx-community/whisper-base']) expect(notice).toContain(name);
+    expect(notice).toBe(fs.readFileSync(path.join(ROOT, 'NOTICE'), 'utf8'));
+    fs.rmSync(path.join(out, 'licenses/Apache-2.0.txt'));
+    expect(audit(out).stderr).toMatch(/licenses\/Apache-2\.0\.txt: missing from the build/);
+    fs.copyFileSync(path.join(WEB, 'public/licenses/Apache-2.0.txt'), path.join(out, 'licenses/Apache-2.0.txt'));
+    expect(audit(out).status).toBe(0);
+
     // a swapped /models/ glue is a build failure, and so is a tampered built-in copy
     fs.mkdirSync(path.join(out, 'models/ort'), { recursive: true });
     fs.writeFileSync(path.join(out, 'models/ort/ort-wasm-simd-threaded.mjs'), 'swapped');

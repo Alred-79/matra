@@ -57,6 +57,23 @@ function ortGluePinned(): Plugin {
 }
 
 /**
+ * Ships the licence texts third-party software we distribute requires (NOTICE.txt at /licenses/NOTICE.txt, next to the
+ * licence texts in public/licenses/). The repository's NOTICE is the single source: it is copied at build time, so the
+ * attribution in the build can never drift from it. scripts/audit-web-build.mjs (check 7) fails a build without them.
+ */
+function noticeShipped(): Plugin {
+  return {
+    name: 'matra:notice-shipped',
+    apply: 'build',
+    async generateBundle() {
+      const fs = await import('node:fs');
+      const source = fs.readFileSync(fileURLToPath(new URL('../../NOTICE', import.meta.url)), 'utf8');
+      this.emitFile({ type: 'asset', fileName: 'licenses/NOTICE.txt', source });
+    },
+  };
+}
+
+/**
  * MATRA_MATCHING=off|on (one switch, also read by the app server; @matra/shared matching-mode.ts). Off — the pilot
  * default — builds the app WITHOUT sealed matching: `__MATRA_MATCHING__` is a literal false, so the matching screens,
  * the escrow and match-contact questions, the phone step, the counselor portal and their API calls are left out of the
@@ -212,7 +229,7 @@ function matraBuildInfo(): Plugin {
 }
 
 const config = {
-  plugins: [react(), matraBuildInfo(), ortGluePinned()],
+  plugins: [react(), matraBuildInfo(), ortGluePinned(), noticeShipped()],
   define: {
     // a build without sealed matching carries only the org key (attorney directory), not the OPRF pin fields
     __MATRA_MATCH_PINS__: JSON.stringify(MATCHING_IN_BUILD ? matchPins : { rosterKey: matchPins.rosterKey }),

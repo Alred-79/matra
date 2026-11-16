@@ -19,6 +19,7 @@
  *     file is not: the browser would refuse it at run time, and an unlisted one should not be served at all.
  *
  *  5b. The CPU ONNX Runtime JS glue (code the browser cannot check at run time) is built into the app as the pinned bytes.
+ *  7. Licence texts and NOTICE ship in the build (licenses/), and NOTICE names the third-party software we distribute.
  *  6. The span-marker (src/ml/marker) left out of a MATRA_MARKER=off build, which is the default: none of its strings is in
  *     any shipped file. It has no survivor-facing screen in this build, so "on" only matters for the dev-only preview.
  *
@@ -43,6 +44,8 @@ const ALLOWED_HOSTS = {
   'creativecommons.org': 'the CC BY 4.0 licence link in the passphrase word-list credit (NOTICE; a link she can choose to follow)',
   'huggingface.co': 'transformers.js default model host; disabled (env.allowRemoteModels = false, remoteHost overridden; CSP connect-src self)',
   'cdn.jsdelivr.net': 'ONNX Runtime default wasm path; overridden to /models/ort/ (apps/web/src/voice/worker.ts; CSP script-src self)',
+  'www.apache.org': 'the Apache-2.0 licence text shipped under /licenses/ (a link inside the text, never fetched)',
+  'www.eff.org': 'attribution links in /licenses/NOTICE.txt (the EFF word list source; never fetched)',
   'react.dev': 'React error-message text',
   'reactrouter.com': 'React Router warning text',
   'github.com': 'library comments / error-message text',
@@ -146,6 +149,21 @@ for (const [h, where] of hosts)
     const hit = !hasWorker || all.find((f) => rel(f).startsWith('assets/') && fs.statSync(f).size === pin.size && createHash('sha256').update(fs.readFileSync(f)).digest('hex') === pin.sha256);
     if (!hit) problems.push(`assets/: no file equal to the pinned ${pin.path} (size ${pin.size}, sha256 ${pin.sha256.slice(0, 12)}...) is built into the app`);
     if (all.some((f) => rel(f).startsWith(`models/ort/${pin.path}`))) problems.push(`models/ort/${pin.path}: the glue must be built into the app, not served from /models/`);
+  }
+}
+
+// 7. licence texts and the attribution notice ship with every build of the full app (Apache-2.0 section 4, MIT, CC BY 4.0)
+{
+  const all = walk(DIST);
+  const fullApp = all.some((f) => /^assets\/index-[^/]*\.js$/.test(rel(f)));
+  if (fullApp)
+    for (const need of ['licenses/NOTICE.txt', 'licenses/Apache-2.0.txt', 'licenses/MIT-onnxruntime-web.txt'])
+      if (!all.some((f) => rel(f) === need)) problems.push(`${need}: missing from the build (third-party licence texts must ship with the app)`);
+  const notice = all.find((f) => rel(f) === 'licenses/NOTICE.txt');
+  if (fullApp && notice) {
+    const text = fs.readFileSync(notice, 'utf8');
+    for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'whisper-base'])
+      if (!text.includes(name)) problems.push(`licenses/NOTICE.txt does not mention ${name}`);
   }
 }
 
