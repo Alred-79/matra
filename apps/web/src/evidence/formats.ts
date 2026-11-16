@@ -5,7 +5,7 @@
  *
  * Wording is survivor-facing: flagged for advocate review in the P6 log.
  */
-import { adviceFor, canStrip } from '../lib/metadata';
+import { canStrip } from '../lib/metadata';
 
 /** Shown next to the file chooser, before she adds anything. */
 export const IMPORT_FORMAT_NOTICE =
@@ -19,7 +19,7 @@ export const storedExactly = (mimeType: string): boolean => !canStrip(mimeType);
  */
 export function unstrippedWarning(mimeType: string, stripped: boolean): string | null {
   if (stripped) return null;
-  return `Hidden details were not removed from this file. It is stored exactly as you added it, including anything hidden inside it, such as a location, a date or a name. ${adviceFor(mimeType)}`;
+  return `Hidden details were not removed from this file. It is stored exactly as you added it, including anything hidden inside it, such as a location, a date or a name.`;
 }
 
 /**

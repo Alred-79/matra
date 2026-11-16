@@ -157,7 +157,9 @@ describe('buildDataExport: the evidence reader’s lists', () => {
       listShares: async () => ({ shares: [] }),
       listAudit: async () => ({ events: [] }),
     } as unknown as ApiClient;
-    const files = unzip((await buildDataExport(fake, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'))).zip);
+    const built = await buildDataExport(fake, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'));
+    expect(built.evidenceCount).toBe(1); // the two lists are not evidence files
+    const files = unzip(built.zip);
     const text = (n: string) => new TextDecoder().decode(files.get(n)!);
     expect(text('evidence/exhibit-list.csv')).toContain(`"1","wrists.jpg","2026-08-14T23:00:00.000Z","Photo (image/jpeg)"`);
     expect(text('evidence/exhibit-list.csv')).toContain(commitment);

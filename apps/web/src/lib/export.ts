@@ -135,6 +135,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     }
   }
 
+  const evidenceFileCount = entries.length; // the evidence files themselves, before the lists below
   if (priv && !priv.unreadable) {
     const items = [...itemByBlob.values()];
     const exhibits = buildExhibits(blobs, items, priv.value.items);
@@ -202,7 +203,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     zip: createZip(files),
     fileName: `matra-my-data-${at.slice(0, 10)}.zip`,
     recordCount: records.filter((r) => r.kind !== 'your preferences').length,
-    evidenceCount: entries.length,
+    evidenceCount: evidenceFileCount,
     unreadableRecords: loadProblems.length,
     problems,
   };
