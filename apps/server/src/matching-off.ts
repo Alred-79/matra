@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { parseMatchingMode, type MatchingMode } from '@matra/shared';
+import Database from 'better-sqlite3';
 import type { DB } from './db.js';
 
 /** Every API route that exists only for sealed matching, staged release to counselors, or the counselor portal. */
@@ -29,6 +30,9 @@ export const MATCHING_ONLY_VARS: RegExp[] = [
   /^MATRA_OPRF_SHARE/, // MATRA_OPRF_SHARE_<i>, _<i>_FILE, MATRA_OPRF_SHARE_PUBKEYS
   /^MATRA_OPRF_KEY_[AB](_FILE)?$/, // the retired additive keys (fatal with matching on too, config.ts)
   /^MATRA_OPRF_HOLDER_URLS$/,
+  /^MATRA_OPRF_THRESHOLD$/, // public pins (not secrets), but only an "on" build or server reads them; the off web build refuses them too
+  /^MATRA_ATTESTATION_PLATFORM_PUBKEY$/,
+  /^MATRA_MATCHER_MEASUREMENT$/,
   /^MATRA_HOLDER_TOKEN_KEY/,
   /^MATRA_MATCHER_(URL|KEY|KEY_FILE|TOKEN|TOKEN_FILE)$/,
   /^MATRA_ATTESTATION_PLATFORM_KEY(_FILE)?$/,
@@ -98,6 +102,34 @@ export function checkLeftoverMatchingRows(db: DB, production: boolean): void {
     `and ${reportReleases} report release${reportReleases === 1 ? '' : 's'} from when matching was on. They stay unreachable, and nothing is deleted; housekeeping ends any live release for her (and deletes the counselor's copy of its keys).`;
   if (production) throw new Error(`${msg} Refusing to start in production: decide what happens to them first (docs/DEPLOY.md).`);
   console.warn(`[matra] WARNING: ${msg}`);
+}
+
+/**
+ * The same refusal, made BEFORE the database is migrated: a production server set to off over a database that holds
+ * matching rows stops with the file exactly as the operator left it (migrations v12 and v13 haven't run, so nothing
+ * has been rebuilt or cleared and the file can still be restored by an older server). Reads the file read-only; a file
+ * that doesn't exist yet, or has no matching tables yet, passes. checkLeftoverMatchingRows still runs after migration.
+ */
+export function preflightLeftoverMatchingRows(dbPath: string, production: boolean): void {
+  if (!production || dbPath === ':memory:' || !fs.existsSync(dbPath)) return;
+  let db: InstanceType<typeof Database> | undefined;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const has = (t: string) => !!db!.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
+    const n = (t: string) => (has(t) ? (db!.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n : 0);
+    const matchEntries = n('match_entries');
+    const reportReleases = n('report_releases');
+    if (matchEntries || reportReleases)
+      throw new Error(
+        `MATRA_MATCHING is off, but ${dbPath} still holds ${matchEntries} sealed-match entr${matchEntries === 1 ? 'y' : 'ies'} and ${reportReleases} report release${reportReleases === 1 ? '' : 's'} from when matching was on. ` +
+          'Refusing to start in production before touching the database (no migration has run): decide what happens to them first (docs/DEPLOY.md).',
+      );
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('MATRA_MATCHING is off')) throw e;
+    // unreadable here (locked, a hot WAL we can't open read-only): the check after migration still applies
+  } finally {
+    db?.close();
+  }
 }
 
 /** Written by the web build next to index.html (apps/web/vite.config.ts BUILD_INFO_FILE). */

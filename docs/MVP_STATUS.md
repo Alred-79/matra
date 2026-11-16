@@ -15,7 +15,7 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 | Server | **B** | Express + SQLite, append-only ledger enforced by triggers, rate limits on register and login, strict CSP in production |
 | Trauma-informed UX | **B / unvalidated** | Skip-anything, Quick Exit, triple-Esc, 15-minute idle lock, 18+ gate. **No advocate has reviewed the script yet**, which is the single biggest credibility gap |
 | Legal posture | **B+ research / F review** | Excellent memo. Zero review by licensed counsel |
-| Ops readiness | **D+** | No hosted demo URL, no entity, no legal-request policy, no audit. A CI workflow (`.github/workflows/ci.yml`: typecheck, unit tests, both matching settings, e2e nightly) was added on `p1/vault-foundation` and has not yet run on GitHub. *weekend-mvp:* drafts in [ops/](ops/): incident-response plan (pending counsel), n-of-m deploy governance (proposed, not configured), hosting comparison (nothing provisioned), export-control question |
+| Ops readiness | **D+** | No hosted demo URL, no entity, no legal-request policy, no audit. A CI workflow (`.github/workflows/ci.yml`: typecheck, unit tests, both matching settings, the pilot e2e suite on pull requests, all e2e suites nightly) was added on `p1/vault-foundation` and has not yet run on GitHub. *weekend-mvp:* drafts in [ops/](ops/): incident-response plan (pending counsel), n-of-m deploy governance (proposed, not configured), hosting comparison (nothing provisioned), export-control question |
 | Escrow (matching) | **C+, demo-only** | Survivor self-probing is closed. *weekend-mvp* (details in §0): 2-of-3 threshold OPRF with separate holder processes, phone verify-then-forget, a separate matcher routing each group to one counselor by state, counselor-first staged release. Still demo-only: the operator can test guessed identifiers in both holder modes (W2, W14), attestation is simulated (W18), the contact gate is server-side (W21), phones are friction, not Sybil resistance (W13, W19). Correctly kept off for any pilot: `MATRA_MATCHING=off` leaves it out of the build and the server |
 
 ## 0. Branch `weekend-mvp` (2026-11-11): what shipped
@@ -64,8 +64,8 @@ A pull request stacked on PR #2 (merge #2 first); not merged, not pushed. It bui
 ### Verification run on 2026-11-15 (`p1/vault-foundation`)
 
 - `npm run typecheck`: clean across all workspaces.
-- `npm test`: crypto 199, matcher 30, server 208 + 1 skipped, web 370 + 1 skipped (**807 passing, 2 skipped**). The same counts with `MATRA_MATCHING=on`.
-- `npm run e2e`: default suite **12 passed, 1 skipped** (voice), pilot suite (matching off) **8 passed**, demo stack **6 passed** (it still logs the one harmless `matcher sync (roster) failed: ... 400` at startup).
+- `npm test`: crypto 199, matcher 30, server 209 + 1 skipped, web 370 + 1 skipped (**808 passing, 2 skipped**). The same counts with `MATRA_MATCHING=on`.
+- `npm run e2e`: default suite **12 passed, 1 skipped** (voice), pilot suite (matching off) **8 passed**, demo stack **6 passed**, and `npm run e2e:prod` (production demo build, matching on) **12 passed, 1 skipped** (the demo stack still logs the one harmless `matcher sync (roster) failed: ... 400` at startup).
 - A production web build with `MATRA_MATCHING=off` (org key pinned) and with `on` (demo), each followed by `scripts/audit-web-build.mjs`: ok. `npm run legal -- check`: ok.
 
 ### Verification run on 2026-11-11 (`weekend-mvp`, final check after the walkthrough docs)

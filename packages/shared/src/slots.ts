@@ -3,8 +3,8 @@
  * the ledger (apps/server/src/slots.ts, packages/crypto/src/slots.ts). Her draft autosaves here; sealing writes a WORM
  * record as before and leaves the slot in place, so she can add to a sealed version later.
  *
- * MATRA_DRAFT_MODE=slot|keep-versions decides whether the server also keeps each earlier draft (counsel questions Q-004
- * and Q-073 decide the launch default; until then it is "slot"):
+ * MATRA_DRAFT_MODE=slot|keep-versions decides whether the server also keeps each earlier draft (counsel question Q-004
+ * decides the launch default; until then it is "slot"):
  *   slot           each save replaces the one before. Only the newest draft exists on the server.
  *   keep-versions  each save ALSO files the same envelope as a WORM record with a ledger entry (how every draft save
  *                  worked before slots), so every earlier draft is kept until she deletes her account.

@@ -147,7 +147,8 @@ export function ChangePassphrase() {
         <h2 id="sessions-heading">Where you’re signed in</h2>
         <p className="small muted" style={{ margin: 0 }}>
           We don’t keep which device, browser or place a sign-in came from, only when it started. Each one ends by itself
-          12 hours after it starts.
+          12 hours after it starts. A tab you closed or reloaded without choosing Lock &amp; sign out still shows here until
+          it ends.
         </p>
         {sessions.loading && <Loading />}
         {sessions.error && <ErrorNote>{sessions.error}</ErrorNote>}

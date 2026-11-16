@@ -41,7 +41,7 @@ export function resolveDraftsDbPath(dbPath: string, env: Env = process.env): str
 /**
  * MATRA_DRAFT_MODE=slot|keep-versions (packages/shared/src/slots.ts). Default "slot": a draft save replaces the one
  * before. "keep-versions" also files every draft save as a WORM record with a ledger entry. Which one launches waits on
- * counsel (Q-004, Q-073); anything else is refused.
+ * counsel (Q-004); anything else is refused.
  */
 export function loadDraftMode(env: Env = process.env): DraftMode {
   return parseDraftMode(env.MATRA_DRAFT_MODE);

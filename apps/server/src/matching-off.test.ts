@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import Database from 'better-sqlite3';
 import request from 'supertest';
 import type express from 'express';
 import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
@@ -19,6 +20,7 @@ import {
   MATCHING_ROUTE_PREFIXES,
   WEB_BUILD_INFO,
   checkLeftoverMatchingRows,
+  preflightLeftoverMatchingRows,
   loadMatchingMode,
   matchingOnlyVarsSet,
 } from './matching-off.js';
@@ -174,6 +176,29 @@ describe('matching off: leftover rows from when it was on', () => {
     getDb(off).close();
   });
 
+  it('production refuses before any migration runs: the file is left at its old schema version', async () => {
+    const dbPath = tmpDb();
+    const on = makeMatchingApp({ dbPath });
+    const jane = await registerUser(on.app, 'jane.pre');
+    await registerUser(on.app, 'loc.pre', 'counselor');
+    await sealMatch(on.app, jane, 'email', 'person@example.com');
+    // as if the database was last opened by a server from before migrations v12 and v13
+    on.db.pragma('user_version = 11');
+    on.db.pragma('wal_checkpoint(TRUNCATE)');
+    on.db.close();
+    vi.stubEnv('NODE_ENV', 'production');
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    expect(() => createApp({ dbPath, pepper: TEST_PEPPER, matching: false })).toThrow(/no migration has run/);
+    const check = new Database(dbPath, { readonly: true });
+    expect(check.pragma('user_version', { simple: true })).toBe(11);
+    check.close();
+    // a missing file, an empty database and development are not refused here
+    expect(() => preflightLeftoverMatchingRows(path.join(os.tmpdir(), 'matra-no-such.db'), true)).not.toThrow();
+    expect(() => preflightLeftoverMatchingRows(dbPath, false)).not.toThrow();
+  });
+
   it('an empty database is fine in production too', () => {
     const { db } = makeApp();
     expect(() => checkLeftoverMatchingRows(db, true)).not.toThrow();
@@ -210,6 +235,9 @@ describe('MATRA_MATCHING at startup (loadMatchingMode)', () => {
       'MATRA_SMS_PROVIDER',
       'TWILIO_AUTH_TOKEN',
       'TWILIO_ACCOUNT_SID',
+      'MATRA_OPRF_THRESHOLD',
+      'MATRA_ATTESTATION_PLATFORM_PUBKEY',
+      'MATRA_MATCHER_MEASUREMENT',
       'MATRA_OPRF_KEY_A',
       'MATRA_OPRF_KEY_B_FILE',
     ];
@@ -224,7 +252,7 @@ describe('MATRA_MATCHING at startup (loadMatchingMode)', () => {
     // all of them are named at once; empty values (an unset Docker build arg) don't count
     expect(matchingOnlyVarsSet({ MATRA_PHONE_HASH_KEY: 'k', MATRA_MATCHER_URL: 'u', MATRA_OPRF_SHARE_1: '' })).toEqual(['MATRA_MATCHER_URL', 'MATRA_PHONE_HASH_KEY']);
     // and what the pilot still needs is not on the list
-    for (const v of ['MATRA_PEPPER', 'MATRA_DB_PATH', 'MATRA_COUNSELOR_ROSTER_PUBKEY', 'MATRA_DEMO_MODE', 'MATRA_OPRF_THRESHOLD'])
+    for (const v of ['MATRA_PEPPER', 'MATRA_DB_PATH', 'MATRA_COUNSELOR_ROSTER_PUBKEY', 'MATRA_DEMO_MODE'])
       expect(matchingOnlyVarsSet({ [v]: 'x' })).toEqual([]);
   });
 

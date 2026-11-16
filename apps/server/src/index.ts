@@ -22,7 +22,7 @@ const port = Number(process.env.PORT) || 4000;
 const host = process.env.HOST || (production ? '0.0.0.0' : undefined);
 const dbPath = resolveDbPath();
 const draftsDbPath = resolveDraftsDbPath(dbPath);
-// MATRA_DRAFT_MODE=slot|keep-versions (packages/shared/src/slots.ts): the launch default waits on counsel (Q-004, Q-073).
+// MATRA_DRAFT_MODE=slot|keep-versions (packages/shared/src/slots.ts): the launch default waits on counsel (Q-004).
 const draftMode = loadDraftMode();
 console.log(
   draftMode === 'slot'

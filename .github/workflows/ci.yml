@@ -2,9 +2,10 @@
 #
 # Every push to main and every pull request: typecheck, the unit tests of every workspace with sealed matching at its
 # default (off) and with MATRA_MATCHING=on, the slow web build tests in their own job, a production web build audited
-# in both modes, and the legal research bank check. The browser suites (default, pilot and demo stacks) run nightly and
-# on demand (workflow_dispatch), because each needs a full stack and a browser. The model fetch check runs on pushes to
-# main, nightly and on demand, not on pull requests (it downloads about 94 MB from huggingface.co; no secrets).
+# in both modes, and the legal research bank check, plus the pilot browser suite. All three browser suites (default,
+# pilot and demo stacks) run nightly and on demand (workflow_dispatch), because each needs a full stack and a browser.
+# The model fetch check runs on pushes to main, nightly and on demand, not on pull requests (it downloads about 94 MB
+# from huggingface.co; no secrets).
 #
 # Nothing here needs a secret. No job deploys, publishes or pushes anything.
 #
@@ -30,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -114,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        matching: [off, 'on']
+        matching: ['off', 'on']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -173,19 +174,15 @@ jobs:
 
   e2e:
     name: Browser tests (${{ matrix.name }})
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Pull requests run the pilot suite (about a minute and a half): it holds the browser-level seal order, the stop
+    # screens and the ended-session checks. Nightly and on demand run all three. Pushes to main run none.
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: default stack (matching on)
-            config: playwright.config.ts
-          - name: pilot stack (matching off)
-            config: playwright.pilot.config.ts
-          - name: demo stack
-            config: playwright.demo.config.ts
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"pilot stack (matching off)","config":"playwright.pilot.config.ts"}]' || '[{"name":"default stack (matching on)","config":"playwright.config.ts"},{"name":"pilot stack (matching off)","config":"playwright.pilot.config.ts"},{"name":"demo stack","config":"playwright.demo.config.ts"}]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0

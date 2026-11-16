@@ -117,6 +117,8 @@ describe('Passphrase and devices', () => {
     await waitFor(() => expect(screen.getByTestId('session-list').querySelectorAll('li')).toHaveLength(2));
     expect(screen.getByTestId('session-list')).toHaveTextContent(/This device: since/);
     expect(screen.getByTestId('session-list')).toHaveTextContent(/Another sign-in: since/);
+    // a reloaded or closed tab keeps its first session for up to 12 hours, so one device can show twice: the screen says so
+    expect(screen.getByTestId('sessions')).toHaveTextContent(/closed or reloaded without choosing Lock & sign out still shows here until it ends/);
     await user.type(screen.getByTestId('signout-others-passphrase'), PASS);
     await user.click(screen.getByTestId('signout-others'));
     await waitFor(() => expect(screen.getByTestId('signout-others-done')).toHaveTextContent('Done. 1 other session was signed out.'), { timeout: 20_000 });

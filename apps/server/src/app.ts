@@ -100,7 +100,7 @@ import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimi
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
 import { INSPECTOR_ROUTE, RequestRecorder, appProcess, fetchProcess, findInDb } from './inspector.js';
-import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, assertWebBuildMatches, checkLeftoverMatchingRows, matchingDisabled } from './matching-off.js';
+import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, assertWebBuildMatches, checkLeftoverMatchingRows, matchingDisabled, preflightLeftoverMatchingRows } from './matching-off.js';
 import { checkpoint as checkpointWal, forgetReleaseKeys, forgetShareKeys, sweepRecipientKeys } from './recipient-keys.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
@@ -112,7 +112,7 @@ export interface CreateAppOptions {
   /**
    * MATRA_DRAFT_MODE (packages/shared/src/slots.ts). Default 'slot': a draft save replaces the one before and writes
    * nothing else. 'keep-versions': each save also files the same envelope as a record with a ledger entry, so every
-   * earlier draft is kept (the launch default waits on counsel: Q-004, Q-073).
+   * earlier draft is kept (the launch default waits on counsel: Q-004).
    */
   draftMode?: DraftMode;
   /** Server secret for HMACs (fake prelogin salts). */
@@ -529,6 +529,8 @@ export const REAUTH_FAILED_AUDIT_CAP = 10;
 const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action IN ('auth.recovered', 'auth.passphrase_changed', 'auth.other_sessions_ended', ${REAUTH_FAILED_ACTIONS.map((a) => `'${a}'`).join(', ')}))`;
 
 export function createApp(opts: CreateAppOptions): express.Express {
+  // Matching off over matching rows: production refuses before any migration touches the file (matching-off.ts).
+  if (!opts.matching) preflightLeftoverMatchingRows(opts.dbPath, process.env.NODE_ENV === 'production');
   const db: DB = openDb(opts.dbPath);
   const slots = new SlotStore(opts.draftsDbPath ?? draftsDbPathFor(opts.dbPath), SLOT_MAX_PER_ACCOUNT);
   const draftMode: DraftMode = opts.draftMode ?? 'slot';

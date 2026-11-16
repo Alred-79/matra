@@ -19,6 +19,7 @@ right-hand column.
 | What leaks | Readable to the attacker without further keys | What it enables |
 |---|---|---|
 | App database (or a backup, or the WAL) | Usernames (may be real names), roles, account and record creation times, record sizes, share metadata (which survivor account shared with which attorney, the share's made-up label (older shares: her username), the consent statement text, times), attorney and counselor directory entries, audit rows, ledger hashes, OPRF tags, phone-token hashes, staged-release requests and answers (who asked whom, yes/no, times) | Offline guessing of weak passphrases against the stored scrypt / PBKDF2 parameters (W5); linking accounts to attorneys; tags are useless without t OPRF shares (W2) |
+| Draft-slots database (`<name>-drafts.db`, or a backup, or its WAL) | Account ids, how many slots each account has, ciphertext size to the nearest 16 KiB, the UTC day of each account's last draft write, the main database's id | Which accounts are active and roughly when; no content |
 | App database **and** `MATRA_PHONE_HASH_KEY` | As above | Testing whether a guessed phone number verified *some* account (not which; W19) |
 | t or more OPRF key shares (or `MATRA_HOLDER_TOKEN_KEY` while holders are online) | Nothing directly | Recomputing tags for guessed identifiers, so the tags in a leaked DB become testable (W2, W14) |
 | Matcher database | Tags, entry times, account-creation hours, **incident and survivor states in clear** (W18) | Where reported incidents happened and where survivors live, per tag |
