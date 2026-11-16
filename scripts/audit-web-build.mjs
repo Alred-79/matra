@@ -18,6 +18,9 @@
  *     SHA-256, and nothing else is there. A dist/models without models (MATRA_SKIP_MODELS=1) is fine; a wrong or unlisted
  *     file is not: the browser would refuse it at run time, and an unlisted one should not be served at all.
  *
+ *  6. The span-marker (src/ml/marker) left out of a MATRA_MARKER=off build, which is the default: none of its strings is in
+ *     any shipped file. It has no survivor-facing screen in this build, so "on" only matters for the dev-only preview.
+ *
  * Hosts in shipped code are not the same as requests: the CSP (apps/server/src/app.ts WEB_CSP) is what stops the
  * browser from contacting anything but this origin (connect-src/script-src/img-src… 'self'), and the e2e suite fails
  * on any request to another origin (e2e/helpers.ts). This audit catches a dependency or a change that would ADD one.
@@ -83,6 +86,16 @@ if (matchingMode !== 'off' && matchingMode !== 'on') {
   process.exit(1);
 }
 
+/** The MATRA_MARKER this build was made with (matra-marker.json); a build without the file is treated as off. */
+let markerMode = 'off';
+try {
+  markerMode = JSON.parse(fs.readFileSync(path.join(DIST, 'matra-marker.json'), 'utf8')).marker === 'on' ? 'on' : 'off';
+} catch {
+  /* keep off */
+}
+/** Strings that exist only in the marker's code (error-free minification keeps string literals). */
+const MARKER_ONLY = ['understand-rules', 'not-exact-substring', 'sensitive-group', 'reported-speech'];
+
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
 const TEXT = /\.(html|js|mjs|cjs|css|json|webmanifest|svg|txt)$/i;
 const files = walk(DIST).filter((f) => TEXT.test(f));
@@ -109,6 +122,9 @@ for (const f of files) {
   // 4. sealed matching left out
   if (matchingMode === 'off')
     for (const m of MATCHING_ONLY) if (lower.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_MATCHING=off build`);
+  // 6. marker left out
+  if (markerMode === 'off')
+    for (const m of MARKER_ONLY) if (text.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_MARKER=off build`);
   for (const m of text.matchAll(/\b(?:https?|wss?):\/\/([a-z0-9.-]+)/gi)) {
     const h = m[1].toLowerCase().replace(/\.$/, '');
     if (!hosts.has(h)) hosts.set(h, new Set());
@@ -150,6 +166,7 @@ if (problems.length) {
 }
 console.log(
   `[audit-web] ok: ${files.length} files, no third-party requests or trackers` +
-    `${matchingMode === 'off' ? ', no sealed-matching code (MATRA_MATCHING=off)' : ' (MATRA_MATCHING=on: matching check skipped)'}; ` +
+    `${matchingMode === 'off' ? ', no sealed-matching code (MATRA_MATCHING=off)' : ' (MATRA_MATCHING=on: matching check skipped)'}` +
+    `${markerMode === 'off' ? ', no span-marker code (MATRA_MARKER=off)' : ' (MATRA_MARKER=on: marker check skipped)'}; ` +
     `hosts named: ${[...hosts.keys()].sort().join(', ') || 'none'}`,
 );

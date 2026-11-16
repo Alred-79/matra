@@ -53,6 +53,16 @@ if (!MATCHING_IN_BUILD) {
 }
 
 /**
+ * MATRA_MARKER=off|on (default off): whether the span-marker ("you may have written about this", src/ml/marker) is in the
+ * build at all. Nothing in this branch shows a mark to a survivor (the checklist that would, P2, does not exist), so even
+ * "on" only enables the dev-only preview page in development. A literal false in a default build: the marker code and its
+ * strings are left out of the bundle (scripts/audit-web-build.mjs checks).
+ */
+const markerRaw = (process.env.MATRA_MARKER ?? '').trim().toLowerCase();
+if (markerRaw && markerRaw !== 'on' && markerRaw !== 'off') throw new Error(`MATRA_MARKER must be "off" or "on", got "${process.env.MATRA_MARKER}"`);
+const MARKER_IN_BUILD = markerRaw === 'on';
+
+/**
  * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set them all, so the app
  * server cannot substitute OPRF keys or counselors it controls (values from `npm run -w @matra/server oprf-ceremony`):
  *   MATRA_OPRF_THRESHOLD          t (default 2 when the keys below are set)
@@ -162,12 +172,15 @@ export function assertProductionPins(o: {
  * whatever MATRA_MATCHING its own shell has (scripts/audit-web-build.mjs).
  */
 export const BUILD_INFO_FILE = 'matra-build.json';
+export const MARKER_INFO_FILE = 'matra-marker.json';
 function matraBuildInfo(): Plugin {
   return {
     name: 'matra:build-info',
     apply: 'build',
     generateBundle() {
       this.emitFile({ type: 'asset', fileName: BUILD_INFO_FILE, source: JSON.stringify({ matching: MATCHING_IN_BUILD ? 'on' : 'off' }) + '\n' });
+      // a separate file, so matra-build.json (which the server cross-checks) keeps its one meaning
+      this.emitFile({ type: 'asset', fileName: MARKER_INFO_FILE, source: JSON.stringify({ marker: MARKER_IN_BUILD ? 'on' : 'off' }) + '\n' });
     },
   };
 }
@@ -180,6 +193,7 @@ const config = {
     __MATRA_ATTESTATION__: JSON.stringify(attestationPins),
     __MATRA_DEMO__: JSON.stringify(demoBuild),
     __MATRA_MATCHING__: JSON.stringify(MATCHING_IN_BUILD),
+    __MATRA_MARKER__: JSON.stringify(MARKER_IN_BUILD),
   },
   // The transcription worker (src/voice/worker.ts) is an ES module worker: it code-splits and uses import.meta.
   worker: { format: 'es', plugins: () => [ortRuntimeFromModels()] },
