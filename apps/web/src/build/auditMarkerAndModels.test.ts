@@ -90,6 +90,43 @@ describe('build audit: the span-marker is left out of a default build', () => {
   }, 300_000);
 });
 
+describe('build audit: licence-text hosts are allowed only inside licenses/*.txt', () => {
+  function dist(): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-hosts-'));
+    fs.writeFileSync(path.join(d, 'index.html'), '<!doctype html><html><head></head></html>');
+    fs.writeFileSync(path.join(d, 'matra-build.json'), '{"matching":"off"}');
+    fs.mkdirSync(path.join(d, 'licenses'));
+    fs.mkdirSync(path.join(d, 'assets'));
+    return d;
+  }
+  it('passes in licenses/*.txt, fails in a script, a stylesheet or a json file, and the two hosts are not in the global allowlist', () => {
+    const d = dist();
+    try {
+      for (const host of ['www.apache.org', 'www.eff.org']) {
+        fs.writeFileSync(path.join(d, 'licenses', 'X.txt'), `see http://${host}/licenses/ for the terms`);
+        expect(audit(d).status, `${host} in licenses/X.txt`).toBe(0);
+        fs.rmSync(path.join(d, 'licenses', 'X.txt'));
+        for (const [name, body] of [
+          ['assets/app.js', `fetch("https://${host}/x")`],
+          ['assets/app.css', `@import url("https://${host}/x.css");`],
+          ['assets/data.json', `{"u":"https://${host}/x"}`],
+          ['licenses/not-a-licence.js', `var u="https://${host}/x"`],
+          ['index.txt', `https://${host}/x`],
+        ] as const) {
+          fs.writeFileSync(path.join(d, name), body);
+          const r = audit(d);
+          expect(r.status, `${host} in ${name}`).toBe(1);
+          expect(r.stderr, `${host} in ${name}`).toMatch(new RegExp(`unexpected host ${host.replace(/\./g, '\\.')}`));
+          fs.rmSync(path.join(d, name));
+        }
+      }
+      expect(fs.readFileSync(AUDIT, 'utf8').match(/const ALLOWED_HOSTS = \{[\s\S]*?\n\};/)![0]).not.toMatch(/www\.apache\.org|www\.eff\.org/);
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('build audit: dist/models is exactly the pinned files', () => {
   const m = manifest.models[0];
   const f0 = m.files[0];

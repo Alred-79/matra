@@ -44,8 +44,6 @@ const ALLOWED_HOSTS = {
   'creativecommons.org': 'the CC BY 4.0 licence link in the passphrase word-list credit (NOTICE; a link she can choose to follow)',
   'huggingface.co': 'transformers.js default model host; disabled (env.allowRemoteModels = false, remoteHost overridden; CSP connect-src self)',
   'cdn.jsdelivr.net': 'ONNX Runtime default wasm path; overridden to /models/ort/ (apps/web/src/voice/worker.ts; CSP script-src self)',
-  'www.apache.org': 'the Apache-2.0 licence text shipped under /licenses/ (a link inside the text, never fetched)',
-  'www.eff.org': 'attribution links in /licenses/NOTICE.txt (the EFF word list source; never fetched)',
   'react.dev': 'React error-message text',
   'reactrouter.com': 'React Router warning text',
   'github.com': 'library comments / error-message text',
@@ -54,6 +52,15 @@ const ALLOWED_HOSTS = {
   'developer.mozilla.org': 'library comment text',
   'rolldown.rs': 'bundler runtime error text',
   localhost: 'dev-only fallbacks / URL parsing base',
+};
+
+/**
+ * Hosts allowed ONLY inside the licence texts under licenses/*.txt (links in the text of a licence or an attribution, never
+ * fetched). They are deliberately not in ALLOWED_HOSTS: the same host in a script or stylesheet is still a finding.
+ */
+const LICENSE_TEXT_HOSTS = {
+  'www.apache.org': 'the Apache-2.0 licence text (a link inside the text)',
+  'www.eff.org': 'attribution links in NOTICE.txt (the EFF word list source)',
 };
 
 /** Analytics, tag managers, error trackers, session replay, ad and font CDNs: must never appear. */
@@ -131,6 +138,7 @@ for (const f of files) {
     for (const m of MARKER_ONLY) if (text.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_MARKER=off build`);
   for (const m of text.matchAll(/\b(?:https?|wss?):\/\/([a-z0-9.-]+)/gi)) {
     const h = m[1].toLowerCase().replace(/\.$/, '');
+    if (/^licenses\/[^/]+\.txt$/.test(rel(f)) && h in LICENSE_TEXT_HOSTS) continue;
     if (!hosts.has(h)) hosts.set(h, new Set());
     hosts.get(h).add(rel(f));
   }
