@@ -81,7 +81,7 @@ jobs:
       - name: Check the test environment
         run: |
           set -u
-          bad=$(env | grep -E '^(MATRA_(COUNSELOR_ROSTER_PUBKEY|DEMO_MODE|OPRF_[A-Z_]+|ATTESTATION_[A-Z_]+|MATCHER_[A-Z_]+|VOICE_HARNESS|DB_PATH|DRAFTS_DB_PATH|DRAFT_MODE|PEPPER)|NODE_ENV)=.+' | sed 's/=.*//' || true)
+          bad=$(env | grep -E '^(MATRA_(COUNSELOR_ROSTER_PUBKEY|DEMO_MODE|OPRF_[A-Z_]+|ATTESTATION_[A-Z_]+|MATCHER_[A-Z_]+|VOICE_HARNESS|MARKER|DB_PATH|DRAFTS_DB_PATH|DRAFT_MODE|PEPPER)|NODE_ENV)=.+' | sed 's/=.*//' || true)
           if [ -n "$bad" ]; then
             echo "These variables must be unset for the unit tests:"; echo "$bad"; exit 1
           fi
@@ -149,6 +149,23 @@ jobs:
         run: |
           npm run legal -- index
           git diff --exit-code -- docs/legal-research/INDEX.md
+
+  marker-eval:
+    name: Span-marker eval (not blocking)
+    # Runs the synthetic eval set and prints the plan's gate (section 8.7: precision, recall, negation false-mark rate). It
+    # does not block a merge: the gate decides whether the marker may ever be turned on, and the marker is off. The hard
+    # invariants (no invented span, no mark on a sensitive question) ARE blocking, in the web unit tests (ml/marker/eval.test.ts).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run eval:marker
 
   models:
     name: On-device model files
