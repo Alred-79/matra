@@ -61,6 +61,13 @@ A pull request stacked on PR #2 (merge #2 first); not merged, not pushed. It bui
 
 **Deferred from P1:** envelope v2 with signatures (needs an outside cryptographic review), anchoring the ledger head (needs a time-stamp provider choice), and the sourced constants file (needs content review).
 
+### Verification run on 2026-11-15 (`p1/vault-foundation`)
+
+- `npm run typecheck`: clean across all workspaces.
+- `npm test`: crypto 199, matcher 30, server 208 + 1 skipped, web 370 + 1 skipped (**807 passing, 2 skipped**). The same counts with `MATRA_MATCHING=on`.
+- `npm run e2e`: default suite **12 passed, 1 skipped** (voice), pilot suite (matching off) **8 passed**, demo stack **6 passed** (it still logs the one harmless `matcher sync (roster) failed: ... 400` at startup).
+- A production web build with `MATRA_MATCHING=off` (org key pinned) and with `on` (demo), each followed by `scripts/audit-web-build.mjs`: ok. `npm run legal -- check`: ok.
+
 ### Verification run on 2026-11-11 (`weekend-mvp`, final check after the walkthrough docs)
 
 - `npm run typecheck`: clean across all workspaces.
