@@ -82,3 +82,13 @@ describe('local search', () => {
     expect(map.length).toBe([...norm].length);
   });
 });
+
+describe('exhibit list for the export: files whose details were never saved', () => {
+  it('lists them as "(name not saved)" only when asked, and never as a normal exhibit', () => {
+    const blobs = [blob('i1', '2026-11-01T10:00:00Z'), { id: 'b-orphan', createdAt: '2026-11-02T10:00:00Z', sizeBytes: 77 }];
+    const items = [item('i1', 'a.png')];
+    expect(buildExhibits(blobs, items, {}).map((e) => e.fileName)).toEqual(['a.png']);
+    const all = buildExhibits(blobs, items, {}, { includeUnnamed: true });
+    expect(all.map((e) => [e.number, e.fileName, e.sizeBytes])).toEqual([[1, 'a.png', 1500], [2, '(name not saved)', 77]]);
+  });
+});

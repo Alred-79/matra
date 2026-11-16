@@ -198,5 +198,46 @@ describe('Evidence: the evidence reader (PR 31)', () => {
     expect(mine.commitment).toBe(commitment);
     expect(sent.join('\n')).not.toContain(mine.salt);
   }, 60_000);
-});
 
+  it('when the server keeps every save for good: "keep the original" is switched off with a plain reason, and the screenshot note still shows', async () => {
+    const user = userEvent.setup();
+    const base = fakeAuthFetch();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://x');
+      const method = init?.method ?? 'GET';
+      if (url.pathname === '/api/vault/records' && method === 'GET') return json(200, { records: [] });
+      if (url.pathname.startsWith('/api/vault/slots/') && method === 'GET') return json(200, { slot: null, draftMode: 'keep-versions' });
+      if (url.pathname.startsWith('/api/vault/slots/') && method === 'PUT') return json(200, { version: 'a'.repeat(32), updatedDay: '2026-11-16', draftMode: 'keep-versions' });
+      if (url.pathname === '/api/vault/blobs' && method === 'GET') return json(200, { blobs: [] });
+      if (url.pathname === '/api/vault/blobs' && method === 'POST') {
+        const at = '2026-11-16T00:00:00Z';
+        return json(201, {
+          blob: { id: 'd'.repeat(32), ownerId: 'u', sizeBytes: 4, contentHash: 'h', createdAt: at, ledgerEntryId: 'l9', ownerWrappedKey: {} },
+          ledgerEntry: { id: 'l9', seq: 9, type: 'blob.sealed', subjectId: 'd'.repeat(32), contentHash: 'h', prevHash: 'p', entryHash: 'e', timestamp: at },
+        });
+      }
+      if (url.pathname.startsWith('/api/ledger/entries/')) return json(404, { error: 'not found' });
+      return base.fetchImpl(input, init);
+    });
+    const { rerender } = render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
+    await act(async () => {
+      await current!.register({ username: 'wren-keepver', passphrase: 'acorn-otter-river-lilac-tulip-zebra', role: 'survivor', ageConfirmed18: true });
+    });
+    rerender(
+      <Harness fetchImpl={fetchImpl as unknown as typeof fetch}>
+        <MemoryRouter>
+          <Evidence />
+        </MemoryRouter>
+      </Harness>,
+    );
+    await screen.findByLabelText('Choose evidence files');
+    await user.click(await screen.findByText('More about fingerprints and originals'));
+    const box = await screen.findByLabelText(/Also keep the original of the next file I add/);
+    await vi.waitFor(() => expect(box).toBeDisabled());
+    expect(screen.getByTestId('keep-original-unavailable')).toHaveTextContent(/isn’t available right now.*Please keep the original on your device/);
+    await user.upload(screen.getByLabelText('Choose evidence files'), new File([new Uint8Array([1, 2, 3])], 'Screenshot 2026-03-03 at 10.12.04.png', { type: 'image/png' }));
+    const row = await screen.findByTestId('evidence-just-added', {}, { timeout: 15_000 });
+    expect(within(row).getByTestId('screenshot-note')).toHaveTextContent(/Its name or size matches a screenshot’s\. Please keep the original messages on your phone too/);
+    expect(within(row).getByText(/keeps every save permanently/)).toBeInTheDocument();
+  }, 60_000);
+});

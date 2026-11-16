@@ -27,4 +27,4 @@ export function unstrippedWarning(mimeType: string, stripped: boolean): string |
  * the original, so the fingerprint cannot show it came from that file.
  */
 export const FINGERPRINT_NOTE =
-  'Matra also keeps a private fingerprint of the file exactly as you chose it, locked in your space. Only a scrambled version of it is ever sent to Matra’s server. If you ever need to show the file existed when you added it, you can, with the key kept in your space. It does not prove that the cleaned copy came from that file.';
+  'Matra also keeps a private fingerprint of the file exactly as you chose it, locked in your space. Only a scrambled version of it is ever sent to Matra’s server. If you ever need to show the file existed when you added it, you can, with the key kept in your space. It doesn’t show that the cleaned copy came from that file.';

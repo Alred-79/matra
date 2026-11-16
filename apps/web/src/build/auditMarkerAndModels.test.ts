@@ -61,9 +61,9 @@ describe('build audit: the span-marker is left out of a default build', () => {
       expect(code).not.toContain('/models/ort/ort-wasm-simd-threaded.mjs');
     }
     // licence texts and the attribution notice ship with the app, and the audit fails without them
-    for (const f of ['NOTICE.txt', 'Apache-2.0.txt', 'MIT-onnxruntime-web.txt']) expect(fs.existsSync(path.join(out, 'licenses', f)), f).toBe(true);
+    for (const f of ['NOTICE.txt', 'Apache-2.0.txt', 'MIT-onnxruntime-web.txt', 'BSD-2-Clause-Leptonica.txt']) expect(fs.existsSync(path.join(out, 'licenses', f)), f).toBe(true);
     const notice = fs.readFileSync(path.join(out, 'licenses/NOTICE.txt'), 'utf8');
-    for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'onnx-community/whisper-base']) expect(notice).toContain(name);
+    for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'onnx-community/whisper-base', 'tesseract.js 7.0.0', 'tesseract.js-core 7.0.0', 'tessdata_best, English', 'Leptonica']) expect(notice).toContain(name);
     expect(notice).toBe(fs.readFileSync(path.join(ROOT, 'NOTICE'), 'utf8'));
     fs.rmSync(path.join(out, 'licenses/Apache-2.0.txt'));
     expect(audit(out).stderr).toMatch(/licenses\/Apache-2\.0\.txt: missing from the build/);

@@ -166,6 +166,8 @@ describe('buildDataExport: the evidence reader’s lists', () => {
     const details = JSON.parse(text('evidence/private-details.json')) as { files: Array<{ originalSha256: string; salt: string; saltedFingerprint: string; textRead: string }> };
     expect(details.files[0]).toMatchObject({ originalSha256: originalSha, salt, saltedFingerprint: commitment, textRead: 'Total $12.50' });
     expect(text('README.txt')).toContain('evidence/private-details.json');
+    // a file whose details were never saved is listed as such, not left out
+    expect(text('evidence/exhibit-list.csv')).not.toContain('(name not saved)');
     // the exhibit list (shareable) never holds the salt or the plain hash
     expect(text('evidence/exhibit-list.csv')).not.toContain(salt);
     expect(text('evidence/exhibit-list.csv')).not.toContain(originalSha);

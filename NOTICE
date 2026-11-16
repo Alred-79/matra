@@ -37,3 +37,23 @@ Whisper base, ONNX conversion (onnx-community/whisper-base, 8-bit quantised weig
         Whisper is by OpenAI; the conversion is by the onnx-community. Licence: Apache License 2.0 as stated on the model
         card (checked 2026-11-16), https://huggingface.co/onnx-community/whisper-base ; original https://github.com/openai/whisper
         The files are used as published; they are not modified, only quantised by the publisher.
+
+-------------------------------------------------------------------------------
+On-device text reading (OCR)
+-------------------------------------------------------------------------------
+Used in: apps/web/src/ml/ocr/ (the worker script and WebAssembly core are built into the app; the language data is served
+from our own origin; see apps/web/src/ml/manifest.json for the pinned files). All unmodified. Licence texts ship with the app
+at /licenses/ (Apache-2.0.txt, BSD-2-Clause-Leptonica.txt, NOTICE.txt).
+
+tesseract.js 7.0.0 (the worker script, dist/worker.min.js)
+        Copyright the tesseract.js contributors. Licence: Apache License 2.0 (/licenses/Apache-2.0.txt)
+        https://github.com/naptha/tesseract.js
+tesseract.js-core 7.0.0 (the WebAssembly build of Tesseract OCR, tesseract-core-simd-lstm.wasm.js)
+        Licence: Apache License 2.0 (/licenses/Apache-2.0.txt). It is built from Tesseract OCR (Copyright Google and the
+        Tesseract OCR contributors, Apache-2.0, https://github.com/tesseract-ocr/tesseract) and Leptonica (Copyright (C) 2001-2020
+        Leptonica, BSD 2-Clause, /licenses/BSD-2-Clause-Leptonica.txt, http://www.leptonica.org/), and links the image-format
+        libraries they use (such as zlib, libpng, libjpeg, libtiff and libwebp), each under its own permissive licence.
+        https://github.com/naptha/tesseract.js-core
+tessdata_best, English (eng.traineddata, the 4.0.0_best_int build distributed in @tesseract.js-data/eng 1.0.0)
+        Copyright Google and the Tesseract OCR contributors. Licence: Apache License 2.0 (/licenses/Apache-2.0.txt)
+        https://github.com/tesseract-ocr/tessdata_best ; npm wrapper (MIT) https://github.com/naptha/tessdata

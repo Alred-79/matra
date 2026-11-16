@@ -24,6 +24,7 @@
 import { loadPinnedFile, VerifiedCache } from '../cache';
 import { modelById, type ModelEntry } from '../manifest';
 import { defaultEnv, IntegrityError, type LoaderEnv } from '../verify';
+import { onWipe } from '../../lib/wipe';
 // The engine's code, built into the app (see manifest.json, models[].bundled): never a /models/ file.
 import ocrWorkerUrl from 'tesseract.js/dist/worker.min.js?url';
 import ocrCoreUrl from 'tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url';
@@ -151,12 +152,26 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
   }
   opts.onProgress?.({ status: 'Starting the reader…' });
   let worker: WorkerLike | undefined;
+  // Lock, idle lock, sign-out and Quick exit stop a read in progress: the worker is ended and nothing is returned or saved.
+  let stopped = false;
+  const stopOnWipe = onWipe(() => {
+    stopped = true;
+    try {
+      worker?.terminate();
+    } catch {
+      /* already gone */
+    }
+  });
   try {
     // a classic worker started from our own build file (the CSP has no blob: worker source)
     worker = opts.spawnWorker ? opts.spawnWorker(code.worker) : (new Worker(code.worker) as unknown as WorkerLike);
-    const send = jobs(worker, (m) => {
+    const rawSend = jobs(worker, (m) => {
       if (m.status === 'recognizing text') opts.onProgress?.({ status: 'Reading the text…', fraction: m.progress });
     });
+    const send = async (action: string, payload: unknown) => {
+      if (stopped) throw new OcrUnavailableError('it was stopped when the screen was locked');
+      return rawSend(action, payload);
+    };
     // the engine's code: exactly the file we built in (a path ending .js is used as it is: no CDN default, no second choice)
     await send('load', { options: { lstmOnly: true, corePath: new URL(code.core, env.origin).href, logging: false } });
     // the language data goes in as the bytes we checked; the engine makes no request and keeps no copy of its own
@@ -164,12 +179,14 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
     await send('initialize', { langs: 'eng', oem: OEM_LSTM_ONLY, config: {} });
     opts.onProgress?.({ status: 'Reading the text…', fraction: 0 });
     const result = await send('recognize', { image: new Uint8Array(await (await forEngine(image)).arrayBuffer()), options: {}, output: { text: true } });
+    if (stopped) throw new OcrUnavailableError('it was stopped when the screen was locked');
     if (typeof result?.text !== 'string') throw new Error('the reader gave no text');
     return { text: result.text, engine: OCR_ENGINE_LABEL };
   } catch (e) {
     if (e instanceof Error && 'friendly' in e) throw e;
     throw new OcrUnavailableError((e as Error)?.message);
   } finally {
+    stopOnWipe();
     try {
       worker?.terminate();
     } catch {

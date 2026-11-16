@@ -20,7 +20,7 @@ import {
   uploadEvidence,
   vaultError,
 } from '../lib/vault';
-import { SlotConflictError, saveDraftSlot } from '../lib/draftSlot';
+import { SlotConflictError, currentDraftMode, saveDraftSlot } from '../lib/draftSlot';
 import { DatesFoundSection } from '../evidence/DatesFoundSection';
 import { DATES_FOUND_IN_BUILD } from '../evidence/datesFlag';
 import { buildExhibits, type Exhibit } from '../evidence/exhibits';
@@ -87,7 +87,9 @@ export function Evidence() {
       api.listBlobs(),
       getWorkingData(),
       // her private details about each file (text read from images, the proof of the original): never blocks the page
-      loadPrivate(api, session.masterKey).then((p) => p.value).catch((): PrivateEvidence => emptyPrivate()),
+      loadPrivate(api, session.masterKey)
+        .then((p) => ({ value: p.value, canKeep: !p.unreadable && currentDraftMode() !== 'keep-versions' }))
+        .catch((): { value: PrivateEvidence; canKeep: boolean } => ({ value: emptyPrivate(), canKeep: false })),
     ]);
     const resume = resumeFrom(slot.slot, vault);
     const final = resume.final;
@@ -95,7 +97,9 @@ export function Evidence() {
     return {
       blobs,
       meta,
-      priv,
+      priv: priv.value,
+      /** her private details can be kept, so a fingerprint can be made and an original kept */
+      canKeepOriginal: priv.canKeep,
       resumeDraft: resume.draft,
       resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.evidence),
       escrowedHashes: resume.escrowedHashes,
@@ -191,6 +195,7 @@ export function Evidence() {
   const metaByBlob = new Map((existing.data?.meta ?? []).filter((m) => m.blobId).map((m) => [m.blobId!, m]));
   const newIds = new Set(uploaded.map((u) => u.item.blobId));
   const priv = existing.data?.priv ?? emptyPrivate();
+  const canKeepOriginal = existing.data?.canKeepOriginal ?? false;
   // a kept original is a second file that belongs to the file it came from, so it is not listed on its own
   const originalIds = new Set(Object.values(priv.items).flatMap((p) => (p.originalBlobId ? [p.originalBlobId] : [])));
   const exhibits = buildExhibits(existing.data?.blobs ?? [], existing.data?.meta ?? [], priv.items);
@@ -260,11 +265,16 @@ export function Evidence() {
           <div className="stack">
             <p className="small muted">{FINGERPRINT_NOTE}</p>
             <label className="row" style={{ alignItems: 'flex-start' }}>
-              <input type="checkbox" checked={keepOriginal} onChange={(e) => setKeepOriginal(e.target.checked)} />
+              <input type="checkbox" checked={keepOriginal && canKeepOriginal} disabled={!canKeepOriginal} onChange={(e) => setKeepOriginal(e.target.checked)} />
               <span>
                 Also keep the original of the next file I add, with its hidden details, locked in my space. <span className="muted small">(Off unless you turn it on, each time.)</span>
               </span>
             </label>
+            {!canKeepOriginal && (
+              <p className="small" role="note" data-testid="keep-original-unavailable">
+                Keeping the original isn’t available right now: {existing.data ? 'this copy of Matra keeps every save permanently, or the extra details saved about your files can’t be opened, so Matra can’t keep an original you could find again.' : 'we are still checking.'} Please keep the original on your device.
+              </p>
+            )}
             <p className="small muted">
               The original can show things the cleaned copy can’t, like when a photo was taken, but it also keeps any location inside your space. It only applies to photos
               that get cleaned; other files are already kept as they are. An advocate or a lawyer can help you decide.
@@ -294,13 +304,13 @@ export function Evidence() {
                     <span className={u.item.metadataStripped ? 'badge ok' : 'badge warn'}>
                       {u.item.metadataStripped ? 'Hidden details removed' : 'Hidden details not removed'}
                     </span>
-                    {u.details?.screenshotLikely && <span className="badge neutral">Screenshot</span>}
+                    {u.item.kind === 'screenshot' && <span className="badge neutral">Screenshot</span>}
                   </div>
                   <p className="small">{u.note}</p>
                   {u.warning && <p className="small" role="note" data-testid="unstripped-warning">{u.warning}</p>}
-                  {u.details?.screenshotLikely && (
+                  {u.item.kind === 'screenshot' && (
                     <p className="small" data-testid="screenshot-note">
-                      This looks like a screenshot, going by its name and size. Please keep the original messages on your phone too.
+                      Its name or size matches a screenshot’s. Please keep the original messages on your phone too.
                     </p>
                   )}
                   {u.details?.originalBlobId && <p className="small">The original is also kept here, locked, with its hidden details.</p>}
@@ -440,7 +450,7 @@ function VaultFile({
         <div className="row">
           <strong style={{ overflowWrap: 'anywhere' }}>{exhibit ? `${exhibit.number}. ` : ''}{meta?.fileName ?? 'Locked file'}</strong>
           {inFinal ? <span className="badge sage">In your sealed story</span> : <span className="badge neutral">Not in your sealed story yet</span>}
-          {(details?.screenshotLikely || meta?.kind === 'screenshot') && <span className="badge neutral">Screenshot</span>}
+          {meta?.kind === 'screenshot' && <span className="badge neutral">Screenshot</span>}
           {view && <VerifyBadge verified={view.verified} />}
         </div>
         <p className="small muted">

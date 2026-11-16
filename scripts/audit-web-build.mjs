@@ -65,6 +65,7 @@ const ALLOWED_HOSTS = {
 const LICENSE_TEXT_HOSTS = {
   'www.apache.org': 'the Apache-2.0 licence text (a link inside the text)',
   'www.eff.org': 'attribution links in NOTICE.txt (the EFF word list source)',
+  'www.leptonica.org': 'the Leptonica project link in NOTICE.txt',
 };
 
 /** Analytics, tag managers, error trackers, session replay, ad and font CDNs: must never appear. */
@@ -181,12 +182,12 @@ for (const [h, where] of hosts)
   const all = walk(DIST);
   const fullApp = all.some((f) => /^assets\/index-[^/]*\.js$/.test(rel(f)));
   if (fullApp)
-    for (const need of ['licenses/NOTICE.txt', 'licenses/Apache-2.0.txt', 'licenses/MIT-onnxruntime-web.txt'])
+    for (const need of ['licenses/NOTICE.txt', 'licenses/Apache-2.0.txt', 'licenses/MIT-onnxruntime-web.txt', 'licenses/BSD-2-Clause-Leptonica.txt'])
       if (!all.some((f) => rel(f) === need)) problems.push(`${need}: missing from the build (third-party licence texts must ship with the app)`);
   const notice = all.find((f) => rel(f) === 'licenses/NOTICE.txt');
   if (fullApp && notice) {
     const text = fs.readFileSync(notice, 'utf8');
-    for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'whisper-base'])
+    for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'whisper-base', 'tesseract.js 7.0.0', 'tesseract.js-core 7.0.0', 'tessdata_best', 'Leptonica'])
       if (!text.includes(name)) problems.push(`licenses/NOTICE.txt does not mention ${name}`);
   }
 }

@@ -138,7 +138,10 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
   const evidenceFileCount = entries.length; // the evidence files themselves, before the lists below
   if (priv && !priv.unreadable) {
     const items = [...itemByBlob.values()];
-    const exhibits = buildExhibits(blobs, items, priv.value.items);
+    const exhibits = buildExhibits(blobs, items, priv.value.items, { includeUnnamed: true });
+    // private details that match no file she has details for (another device saved first): kept so a ledgered commitment can still be opened
+    const named = new Set(exhibits.map((e) => e.id));
+    const unlisted = Object.entries(priv.value.items).filter(([id]) => !named.has(id));
     entries.push({ name: 'evidence/exhibit-list.csv', data: exhibitListCsv(exhibits), date: now });
     entries.push({
       name: 'evidence/private-details.json',
@@ -146,6 +149,12 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
         {
           exportedAt: at,
           note: 'Private: the salts and hashes here are what let you show a salted fingerprint is yours. Keep this file as safe as the evidence itself.',
+          ...(unlisted.length > 0 && {
+            unlistedDetails: {
+              note: 'Details saved for files whose names were not saved (for example when another device saved first). Match them to a file by its salted fingerprint on the ledger.',
+              items: unlisted.map(([id, p]) => ({ id, ...p })),
+            },
+          }),
           files: exhibits.map((e) => {
             const p = priv.value.items[e.id];
             return {

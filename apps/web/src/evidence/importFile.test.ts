@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sha256Hex } from '@matra/crypto';
+import { sealSlot, sha256Hex, slotName } from '@matra/crypto';
 import { setDraftMode } from '../lib/draftSlot';
 import { commit, hashOriginal, isHex64, newSalt, verifyCommitment, verifyOriginal } from './commitment';
 import { importEvidence } from './importFile';
-import { loadPrivate } from './privateStore';
+import { EVIDENCE_PRIVATE_SLOT, loadPrivate } from './privateStore';
 import { everythingSent, fakeApi, testKeys } from './testkit.test-util';
 
 vi.mock('../lib/metadata', async (orig) => {
@@ -164,5 +164,62 @@ describe('importing a file (PR 31)', () => {
     expect(r.privateNote).toMatch(/keeps every save permanently/);
     expect(r.details).toBeNull();
     expect(r.item.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  describe('an original she asked to keep that could not be kept is never dropped silently', () => {
+    const NOT_KEPT = /Your original was NOT kept here either, so please keep it on your device/;
+
+    it('when the server keeps every draft save for good', async () => {
+      const { masterKey } = await testKeys();
+      const { api, uploads } = fakeApi('keep-versions');
+      const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+      expect(uploads).toHaveLength(1);
+      expect(r.privateNote).toMatch(NOT_KEPT);
+    });
+
+    it('when her private slot is stored but does not open', async () => {
+      const { masterKey } = await testKeys();
+      const { api, slots, uploads } = fakeApi();
+      const name = await slotName(masterKey, EVIDENCE_PRIVATE_SLOT);
+      slots.set(name, { name, ...(await sealSlot({ kind: 'something-else' }, masterKey)), version: '9'.repeat(32), updatedDay: 'd' });
+      const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+      expect(uploads).toHaveLength(1);
+      expect(r.privateNote).toMatch(NOT_KEPT);
+      expect(r.details).toBeNull();
+    });
+
+    it('when saving the private details fails: no commitment, no original, and she is told', async () => {
+      const { masterKey } = await testKeys();
+      const { api, uploads } = fakeApi();
+      (api as unknown as { putSlot: () => Promise<never> }).putSlot = async () => Promise.reject(new Error('server said no'));
+      const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0]!.commitment).toBeUndefined();
+      expect(r.privateNote).toMatch(NOT_KEPT);
+      expect(r.details).toBeNull();
+    });
+
+    it('when the original itself fails to upload: the file and its fingerprint stand, she is told, and no original is offered', async () => {
+      const { masterKey } = await testKeys();
+      const { api, uploads } = fakeApi();
+      const real = api.uploadBlob.bind(api);
+      let n = 0;
+      (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
+        if (++n === 1) throw new Error('upload failed');
+        return real(ct, wk, c);
+      };
+      const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+      expect(uploads).toHaveLength(1);
+      expect(r.privateNote).toMatch(NOT_KEPT);
+      expect(r.details?.originalBlobId).toBeUndefined();
+      expect(r.details?.commitment).toBe(uploads[0]!.commitment);
+    });
+
+    it('says nothing about an original she did not ask to keep, or one that is kept as it is anyway', async () => {
+      const { masterKey } = await testKeys();
+      const { api } = fakeApi('keep-versions');
+      expect((await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'))).privateNote).not.toMatch(NOT_KEPT);
+      expect((await importEvidence(api, masterKey, file(rand(100), 'a.pdf', 'application/pdf'), { keepOriginal: true })).privateNote).not.toMatch(NOT_KEPT);
+    });
   });
 });

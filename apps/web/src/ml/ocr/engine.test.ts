@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MANIFEST, modelById, type Manifest, type ModelEntry } from '../manifest';
 import { sha256Hex } from '../verify';
+import { wipeAll } from '../../lib/wipe';
 import { ORIGIN, enc, envFor, fakeFetch } from '../testkit.test-util';
 import { OCR_MODEL_ID, OcrUnavailableError, assertOcrCodeUrls, readTextFromImage, type WorkerLike } from './engine';
 
@@ -112,6 +113,21 @@ describe('on-device text reading', () => {
     const dead = fakeWorker('x');
     dead.w.postMessage = () => queueMicrotask(() => dead.w.onerror?.({ message: 'script error' }));
     await expect(readTextFromImage(image, { env, model, spawnWorker: () => dead.w, codeUrls: CODE })).rejects.toBeInstanceOf(OcrUnavailableError);
+  });
+
+  it('lock, sign-out and Quick exit stop a read in progress: the worker ends and no text comes back', async () => {
+    const { env, model } = await setup();
+    const f = fakeWorker('secret words');
+    const original = f.w.postMessage.bind(f.w);
+    f.w.postMessage = (m: any) => {
+      if (m.action === 'initialize') wipeAll(); // she locks while the reader is starting
+      original(m);
+    };
+    const err = await readTextFromImage(image, { env, model, spawnWorker: () => f.w, codeUrls: CODE }).catch((e) => e);
+    expect(err).toBeInstanceOf(OcrUnavailableError);
+    expect(String(err.message)).toMatch(/stopped/);
+    expect(f.terminate).toHaveBeenCalled();
+    expect(f.sent.map((m) => m.action)).not.toContain('recognize');
   });
 
   it('the real manifest pins the OCR data and both code files, with a licence-checked npm source', () => {

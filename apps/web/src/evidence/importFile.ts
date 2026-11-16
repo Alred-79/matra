@@ -32,6 +32,9 @@ export function evidenceKindFor(file: { type: string; name: string }, screenshot
   return 'other';
 }
 
+/** Said whenever she asked to keep the original and it was not kept: she may be about to delete the one on her phone. */
+export const ORIGINAL_NOT_KEPT = ' Your original was NOT kept here either, so please keep it on your device.';
+
 export interface ImportOptions {
   description?: string;
   capturedAt?: string;
@@ -74,7 +77,8 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
   const sha256 = await hashOriginal(bytes);
 
   // Can her private details be kept? (not when the server keeps every slot write as a permanent record, nor when the slot
-  // she has does not open). If not, no commitment is made: a commitment she could never open is worth nothing.
+  // she has does not open). If not, no commitment is made (a commitment she could never open is worth nothing) and no
+  // original is kept: the original is listed in the private slot, so without it she could not find it again.
   let privateNote: string | null = null;
   try {
     const cur = await loadPrivate(api, masterKey);
@@ -87,7 +91,10 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
   const id = randomId();
   const salt = privateNote ? undefined : newSalt();
   const commitment = salt ? await commit(salt, originalSha256) : undefined;
-  const keepOriginal = !!opts.keepOriginal && !!salt && stripped && sha256 !== originalSha256;
+  // there is a separate original to keep only when the copy differs from it (JPEG, PNG, WebP; everything else is kept as is)
+  const wantsOriginal = !!opts.keepOriginal && stripped && sha256 !== originalSha256;
+  if (wantsOriginal && privateNote) privateNote += ORIGINAL_NOT_KEPT;
+  const keepOriginal = wantsOriginal && !!salt;
 
   mirror(
     'Evidence file',
@@ -96,12 +103,9 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
   );
 
   let originalBlobId: string | undefined;
-  if (keepOriginal) {
-    const e = await encryptForUpload(originalBytes, masterKey);
-    originalBlobId = (await api.uploadBlob(e.ct, e.wrapped)).blob.id;
-  }
   const importedAt = new Date().toISOString();
   let priv: PrivateItem | null = null;
+  let finalNote = privateNote;
   if (salt) {
     priv = {
       originalSha256,
@@ -113,18 +117,30 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
       ...(shot.likely && { screenshotLikely: true }),
       // the original's own date strings, only in a build with "dates found in your files" (off by default)
       ...(DATES_FOUND_IN_BUILD && facts?.exifDates.length && { metadataDates: facts.exifDates }),
-      ...(originalBlobId && { originalBlobId }),
       ...(opts.derivedFrom && { derivedFrom: opts.derivedFrom }),
     };
     try {
       await setPrivateItem(api, masterKey, id, priv);
     } catch (e) {
-      // not saved: do not commit to something she could not open
+      // not saved: do not commit to something she could not open, and do not keep an original she could not find again
       priv = null;
-      return finish(undefined, `We couldn’t save the private fingerprint of this file’s original (${(e as Error).message}). The file itself is added.`);
+      return finish(undefined, `We couldn’t save the private fingerprint of this file’s original (${(e as Error).message}).${wantsOriginal ? ORIGINAL_NOT_KEPT : ''} The file itself is added.`);
+    }
+    if (keepOriginal) {
+      try {
+        const e = await encryptForUpload(originalBytes, masterKey);
+        originalBlobId = (await api.uploadBlob(e.ct, e.wrapped)).blob.id;
+        priv = { ...priv, originalBlobId };
+        await setPrivateItem(api, masterKey, id, priv);
+      } catch (e) {
+        // the original may have gone up but could not be linked to this file, so it is not offered; say so
+        const { originalBlobId: _unlinked, ...withoutOriginal } = priv;
+        priv = withoutOriginal;
+        finalNote = `We couldn’t keep the original (${(e as Error).message}).${ORIGINAL_NOT_KEPT}`;
+      }
     }
   }
-  return finish(commitment, privateNote);
+  return finish(commitment, finalNote);
 
   async function finish(c: string | undefined, pn: string | null): Promise<UploadedEvidence> {
     const e = await encryptForUpload(bytes, masterKey);

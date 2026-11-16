@@ -35,14 +35,25 @@ export interface Exhibit {
 type BlobLike = Pick<BlobMeta, 'id' | 'createdAt' | 'sizeBytes'>;
 
 /** Files she has details for, in the order the server sealed them (blobs arrive oldest first), numbered from 1. */
-export function buildExhibits(blobs: readonly BlobLike[], items: readonly EvidenceItem[], priv: Readonly<Record<string, PrivateItem>>): Exhibit[] {
+export function buildExhibits(
+  blobs: readonly BlobLike[],
+  items: readonly EvidenceItem[],
+  priv: Readonly<Record<string, PrivateItem>>,
+  /** the export lists a file whose details were never saved (another device saved its draft first) as "(name not saved)" */
+  opts: { includeUnnamed?: boolean } = {},
+): Exhibit[] {
   const byBlob = new Map(items.filter((i) => i.blobId).map((i) => [i.blobId!, i]));
   const keptOriginals = new Set(Object.values(priv).flatMap((p) => (p.originalBlobId ? [p.originalBlobId] : [])));
   const ordered = [...blobs].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
   const out: Exhibit[] = [];
   for (const b of ordered) {
     const item = byBlob.get(b.id);
-    if (!item || keptOriginals.has(b.id)) continue;
+    if (keptOriginals.has(b.id)) continue;
+    if (!item) {
+      if (opts.includeUnnamed)
+        out.push({ number: out.length + 1, id: `unnamed-${b.id}`, blobId: b.id, fileName: '(name not saved)', addedAt: b.createdAt, kindLabel: 'Unknown', mimeType: 'unknown', sizeBytes: b.sizeBytes, fingerprint: '', screenshotLikely: false });
+      continue;
+    }
     const p = priv[item.id];
     out.push({
       number: out.length + 1,

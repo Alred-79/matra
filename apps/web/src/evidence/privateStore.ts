@@ -74,7 +74,7 @@ export const emptyPrivate = (): PrivateEvidence => ({ kind: 'evidence-private', 
 export class PrivateStoreUnavailable extends Error {
   readonly friendly = true;
   constructor() {
-    super('This copy of Matra keeps every save permanently, so it does not keep extra details about your files (their text, or the proof of the original).');
+    super('This copy of Matra keeps every save permanently, so it does not keep extra details about your files (their text, or the private fingerprint of the original).');
     this.name = 'PrivateStoreUnavailable';
   }
 }
