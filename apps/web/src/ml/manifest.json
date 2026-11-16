@@ -81,7 +81,7 @@
       "task": "ocr",
       "revision": "@tesseract.js-data/eng@1.0.0 4.0.0_best_int",
       "dtype": "lstm-int8",
-      "$comment": "The English text-recognition data for tesseract.js (Apache-2.0 tessdata_best, integer-quantised LSTM). Not downloaded: scripts/fetch-models.mjs copies it from the installed npm package (source), which must match this pin. The OCR CODE (the tesseract.js worker script and its WebAssembly core) cannot be checked in the browser, because the browser starts a worker from a URL and the core is run by importScripts, so both are built INTO the app instead (bundled: content-hashed files under /assets/, checked at build time by vite.config.ts, scripts/fetch-models.mjs and scripts/audit-web-build.mjs). Only the language data goes through the browser-side check (src/ml/verify.ts) and is handed to the worker as bytes.",
+      "$comment": "The English text-recognition data for tesseract.js (Apache-2.0 tessdata_best, integer-quantised LSTM). Not downloaded: scripts/fetch-models.mjs copies it from the installed npm package (source), which must match this pin. The OCR CODE (the tesseract.js worker script and its WebAssembly core) cannot be checked in the browser, because the browser starts a worker from a URL and the core is run by importScripts, so both are built INTO the app instead (bundled: content-hashed files under /assets/, checked at build time by vite.config.ts, scripts/fetch-models.mjs and scripts/audit-web-build.mjs). Only the language data goes through the browser-side check (src/ml/verify.ts) and is handed to the worker as bytes. The file is gzip data, served under a .bin name on purpose: a static server that sees .gz may add Content-Encoding: gzip, the browser would then decompress it before the hash check, and the pinned bytes would never match. The engine recognises gzip by its first bytes, not its name.",
       "source": {
         "type": "npm",
         "package": "@tesseract.js-data/eng",
@@ -92,7 +92,8 @@
       "cacheName": "ml-model-ocr-eng-4",
       "files": [
         {
-          "path": "eng.traineddata.gz",
+          "path": "eng.traineddata.bin",
+          "from": "eng.traineddata.gz",
           "size": 2952873,
           "sha256": "45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91"
         }

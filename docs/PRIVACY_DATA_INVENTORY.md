@@ -75,6 +75,10 @@ Changing her passphrase, or "sign out everywhere else", deletes her other rows a
 | content_hash, size_bytes | integrity check; size (W11: not padded yet) | account |
 | created_at, ledger_entry_id | when sealed; link to the ledger | account |
 
+Evidence files (P6): each upload may carry a **salted commitment** `SHA-256(salt ‖ SHA-256(original file))` (header `X-Evidence-Commitment`), which is
+written to the ledger as an `evidence.committed` entry for the blob; the server never receives a plain hash of any file, the salt, or the original bytes of
+a file that was stripped (threat model W27). A kept original, if she chose that, is a second ordinary blob.
+
 ### shares, share_blobs (survivor → attorney)
 | Column | What / why | Retention |
 |---|---|---|
@@ -141,6 +145,10 @@ filesystem blocks, can still hold an older one. The file's modification time sho
 | envelope, wrapped_key | ciphertext of her draft (padded to whole 16 KiB) and its key wrapped under her master key | until her next save replaces it, or the account is deleted |
 | version | random 128-bit tag, new on every write (compare-and-swap, so two devices don't overwrite each other); not a count | until her next save |
 | updated_day | UTC day of the last write; no finer time, no creation time | account |
+
+A second slot, her **private evidence slot** (P6, `apps/web/src/evidence/privateStore.ts`), uses the same table under its own opaque name. Its plaintext
+(only her device sees it) holds, per file: the plain hash of the original, the salt of its commitment, the commitment, when she added it, a screenshot label,
+the blob id of a kept original, and the text read from the image if she asked for it. It is not written when the draft mode is `keep-versions` (threat model W29).
 
 ### slots_meta
 | Column | What / why | Retention |

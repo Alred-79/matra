@@ -14,11 +14,16 @@
  *     by a fetch-then-run (the bytes that run would be a second fetch). Both are built INTO the app as content-hashed files
  *     (`?url` below), pinned at build time (vite.config.ts, scripts/fetch-models.mjs, scripts/audit-web-build.mjs).
  *
- * It runs only when she asks for it (the caller is a button), loads the engine on demand, and ends its worker when done.
+ * It talks to tesseract.js's worker script with the small message protocol that script implements (load, loadLanguage,
+ * initialize, recognize) rather than through the library's `createWorker`: in tesseract.js 7.0.0 a language handed in as bytes
+ * is loaded correctly but then used as the language NAME at initialisation, so `createWorker` cannot take our verified bytes.
+ * The protocol is that of the pinned worker script (manifest.json, models[].bundled); a test with the real worker checks it.
+ *
+ * It runs only when she asks for it (the caller is a button), starts the engine on demand, and ends its worker when done.
  */
 import { loadPinnedFile, VerifiedCache } from '../cache';
 import { modelById, type ModelEntry } from '../manifest';
-import { defaultEnv, type LoaderEnv } from '../verify';
+import { defaultEnv, IntegrityError, type LoaderEnv } from '../verify';
 // The engine's code, built into the app (see manifest.json, models[].bundled): never a /models/ file.
 import ocrWorkerUrl from 'tesseract.js/dist/worker.min.js?url';
 import ocrCoreUrl from 'tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url';
@@ -39,14 +44,12 @@ export interface OcrProgress {
   fraction?: number;
 }
 
-/** The part of tesseract.js this module uses (so tests can pass a fake). */
-export interface TesseractLike {
-  createWorker(
-    langs: Array<{ code: string; data: Uint8Array }>,
-    oem: number,
-    options: Record<string, unknown>,
-  ): Promise<{ recognize(image: Blob | Uint8Array): Promise<{ data: { text: string } }>; terminate(): Promise<unknown> }>;
-  OEM: { LSTM_ONLY: number };
+/** The part of a Web Worker this module uses (so tests can pass a fake). */
+export interface WorkerLike {
+  postMessage(message: unknown): void;
+  terminate(): void;
+  onmessage: ((e: { data: any }) => void) | null;
+  onerror: ((e: { message?: string }) => void) | null;
 }
 
 export class OcrUnavailableError extends Error {
@@ -96,11 +99,40 @@ async function forEngine(image: Blob): Promise<Blob> {
 
 export interface ReadTextOptions {
   onProgress?: (p: OcrProgress) => void;
-  /** tests: a stand-in for tesseract.js, an environment and the manifest entry */
-  tesseract?: TesseractLike;
+  /** tests: a stand-in for the worker, an environment and the manifest entry */
+  spawnWorker?: (url: string) => WorkerLike;
   env?: LoaderEnv;
   model?: ModelEntry;
   codeUrls?: { worker: string; core: string };
+}
+
+/** tesseract.js's OEM.LSTM_ONLY */
+const OEM_LSTM_ONLY = 1;
+
+/** Jobs sent to the worker script, one at a time, each answered once. */
+function jobs(w: WorkerLike, onProgress?: (data: { status?: string; progress?: number }) => void) {
+  const pending = new Map<string, { resolve(v: any): void; reject(e: Error): void }>();
+  let n = 0;
+  w.onmessage = ({ data }) => {
+    const p = pending.get(data?.jobId);
+    if (!p) return;
+    if (data.status === 'progress') onProgress?.(data.data);
+    else {
+      pending.delete(data.jobId);
+      if (data.status === 'resolve') p.resolve(data.data);
+      else p.reject(new Error(String(data.data)));
+    }
+  };
+  w.onerror = (e) => {
+    for (const p of pending.values()) p.reject(new Error(e?.message || 'the reader stopped'));
+    pending.clear();
+  };
+  return (action: string, payload: unknown): Promise<any> =>
+    new Promise((resolve, reject) => {
+      const jobId = `job-${n++}`;
+      pending.set(jobId, { resolve, reject });
+      w.postMessage({ workerId: 'matra-ocr', jobId, action, payload });
+    });
 }
 
 /** Read the text printed in one image. The words are the engine's, untouched. */
@@ -109,35 +141,39 @@ export async function readTextFromImage(image: Blob, opts: ReadTextOptions = {})
   const model = opts.model ?? modelById(OCR_MODEL_ID, env.manifest);
   const code = opts.codeUrls ?? { worker: ocrWorkerUrl, core: ocrCoreUrl };
   assertOcrCodeUrls([code.worker, code.core], env.origin);
-  const data = await loadLanguageData(model, env, opts.onProgress);
-  opts.onProgress?.({ status: 'Starting the reader…' });
-  let tess: TesseractLike;
+  let data: Uint8Array;
   try {
-    tess = opts.tesseract ?? ((await import('tesseract.js')) as unknown as TesseractLike);
+    data = await loadLanguageData(model, env, opts.onProgress);
   } catch (e) {
-    throw new OcrUnavailableError((e as Error).message);
+    if (e instanceof IntegrityError)
+      throw new OcrUnavailableError(e.code === 'missing' ? 'the reading data is not part of this copy' : 'the reading data did not pass its safety check, so it was not used');
+    throw new OcrUnavailableError('the reading data could not be loaded');
   }
-  let worker: Awaited<ReturnType<TesseractLike['createWorker']>> | undefined;
+  opts.onProgress?.({ status: 'Starting the reader…' });
+  let worker: WorkerLike | undefined;
   try {
-    worker = await tess.createWorker([{ code: 'eng', data }], tess.OEM.LSTM_ONLY, {
-      workerPath: code.worker,
-      corePath: code.core, // a path ending in .js: the engine loads exactly this file, with no CDN default
-      langPath: '', // never used: the language data is passed in as bytes above
-      workerBlobURL: false, // the CSP has no blob: worker source; start the worker from our own file
-      cacheMethod: 'none', // no copy of the data in IndexedDB; our own verified cache is the only one
-      gzip: true,
-      logger: (m: { status?: string; progress?: number }) => {
-        if (m.status === 'recognizing text') opts.onProgress?.({ status: 'Reading the text…', fraction: m.progress });
-      },
-      errorHandler: () => {},
+    // a classic worker started from our own build file (the CSP has no blob: worker source)
+    worker = opts.spawnWorker ? opts.spawnWorker(code.worker) : (new Worker(code.worker) as unknown as WorkerLike);
+    const send = jobs(worker, (m) => {
+      if (m.status === 'recognizing text') opts.onProgress?.({ status: 'Reading the text…', fraction: m.progress });
     });
+    // the engine's code: exactly the file we built in (a path ending .js is used as it is: no CDN default, no second choice)
+    await send('load', { options: { lstmOnly: true, corePath: new URL(code.core, env.origin).href, logging: false } });
+    // the language data goes in as the bytes we checked; the engine makes no request and keeps no copy of its own
+    await send('loadLanguage', { langs: [{ code: 'eng', data }], options: { cacheMethod: 'none', gzip: true, lstmOnly: true } });
+    await send('initialize', { langs: 'eng', oem: OEM_LSTM_ONLY, config: {} });
     opts.onProgress?.({ status: 'Reading the text…', fraction: 0 });
-    const res = await worker.recognize(await forEngine(image));
-    return { text: res.data.text, engine: OCR_ENGINE_LABEL };
+    const result = await send('recognize', { image: new Uint8Array(await (await forEngine(image)).arrayBuffer()), options: {}, output: { text: true } });
+    if (typeof result?.text !== 'string') throw new Error('the reader gave no text');
+    return { text: result.text, engine: OCR_ENGINE_LABEL };
   } catch (e) {
     if (e instanceof Error && 'friendly' in e) throw e;
-    throw new OcrUnavailableError(typeof e === 'string' ? e : (e as Error)?.message);
+    throw new OcrUnavailableError((e as Error)?.message);
   } finally {
-    await worker?.terminate().catch(() => {});
+    try {
+      worker?.terminate();
+    } catch {
+      /* already gone */
+    }
   }
 }

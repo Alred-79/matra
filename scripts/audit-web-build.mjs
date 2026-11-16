@@ -189,6 +189,8 @@ for (const [h, where] of hosts)
     for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'whisper-base'])
       if (!text.includes(name)) problems.push(`licenses/NOTICE.txt does not mention ${name}`);
   }
+}
+
 // 5c. the OCR code is built into the app as the pinned bytes (assets/), for any build of the full app
 {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'apps/web/src/ml/manifest.json'), 'utf8'));

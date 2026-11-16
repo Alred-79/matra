@@ -11,6 +11,8 @@ export interface PinnedFile {
   path: string;
   size: number;
   sha256: string;
+  /** a model with a `source`: the file's name inside the npm package, when it differs from the name it is served under */
+  from?: string;
 }
 export interface RuntimeFile extends PinnedFile {
   role: 'cpu-wasm' | 'webgpu-wasm';

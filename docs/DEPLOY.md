@@ -54,6 +54,12 @@ When `NODE_ENV=production`:
   verification and on SIGTERM/SIGINT; a crash loses the unwritten counts (W19).
 - The server records t, the group key and the share public keys in the database on first start and **refuses to start if they change**, unless you restart once with `MATRA_OPRF_ROTATE=1` (a deliberate rotation: a new key epoch begins, and each survivor's app re-seals her entries the next time she signs in).
 
+### On-device text reading (OCR): the files
+
+Text in an image can be read **on her device**, only when she taps, by tesseract.js 7.0.0 (Apache-2.0) with English data only (about 6.9 MB: 3.0 MB of language data in `/models/`, plus the engine's worker script and wasm core, 4.0 MB, built into the app under `/assets/`). Nothing is downloaded from anywhere: `npm run build` runs `scripts/fetch-models.mjs`, which copies the language data from the installed `@tesseract.js-data/eng` package into `apps/web/public/models/tesseract/` after checking it against `apps/web/src/ml/manifest.json`. The engine's code is pinned at build time (a changed `tesseract.js` or `tesseract.js-core` fails the build until the pin is updated with it, in one change) and checked again by `scripts/audit-web-build.mjs` (5c). `MATRA_SKIP_MODELS=1` skips the voice download only; `MATRA_SKIP_OCR=1` leaves OCR out (the app then says reading text is not available). The language file is gzip data served under a `.bin` name on purpose (a server that sees `.gz` may add `Content-Encoding: gzip`, which would change the bytes the browser checks). Browsers without WebAssembly SIMD cannot run the engine we ship (only the SIMD build is pinned); they see the same "not available" message.
+
+`MATRA_DATES_FOUND=on` (default off) builds in "dates found in your files" (PR 35): do not turn it on until counsel has answered Q-074 and the sealed-narrative gate exists (P2).
+
 ### On-device voice transcription: the model files
 
 Voice notes are transcribed **on her device** by Whisper (`onnx-community/whisper-base`, multilingual, 8-bit quantized) running in a Web Worker. Audio never leaves the device. The model and the ONNX Runtime wasm are served from **our own origin** under `/models/`; the app is configured so it can never fetch them from huggingface.co or a CDN (a request there would tell a third party that someone is using Matra), and the CSP's `connect-src 'self'` enforces it.

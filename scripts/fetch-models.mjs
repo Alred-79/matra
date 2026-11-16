@@ -138,10 +138,10 @@ async function copyNpmModel(model, problems) {
   }
   console.log(`[fetch-models] ${model.id} (${model.task}, from ${model.source.package}@${version}) -> ${path.relative(ROOT, OUT)}/`);
   for (const f of model.files) {
-    const src = path.join(pkgDir, model.source.path, f.path);
+    const src = path.join(pkgDir, model.source.path, f.from ?? f.path);
     const dest = path.join(OUT, model.id, f.path);
     if (!(await isGood(src, f.size, f.sha256))) {
-      console.error(`  installed ${model.source.package}/${model.source.path}/${f.path} does not match the pinned size/sha256 in src/ml/manifest.json`);
+      console.error(`  installed ${model.source.package}/${model.source.path}/${f.from ?? f.path} does not match the pinned size/sha256 in src/ml/manifest.json`);
       process.exit(1);
     }
     if (await isGood(dest, f.size, f.sha256)) {

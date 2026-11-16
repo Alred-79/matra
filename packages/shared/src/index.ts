@@ -932,7 +932,7 @@ export interface RenewShareRequest {
 export interface LedgerVerifyResponse { ok: boolean; length: number; headHash: string; brokenAtSeq?: number }
 
 /**
- * POST /api/ledger/proof (public): look up sealed-content ledger entries ('record.sealed', 'blob.sealed') by the exact
+ * POST /api/ledger/proof (public): look up sealed-content ledger entries ('record.sealed', 'blob.sealed', and the salted 'evidence.committed') by the exact
  * SHA-256 content hashes the requester already holds, for the in-browser checker (/verify) and the attorney portal.
  * Only exact 64-hex hashes; no prefixes, ids or ranges, so it cannot be used to list the ledger.
  */

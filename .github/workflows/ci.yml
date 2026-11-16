@@ -81,7 +81,7 @@ jobs:
       - name: Check the test environment
         run: |
           set -u
-          bad=$(env | grep -E '^(MATRA_(COUNSELOR_ROSTER_PUBKEY|DEMO_MODE|OPRF_[A-Z_]+|ATTESTATION_[A-Z_]+|MATCHER_[A-Z_]+|VOICE_HARNESS|MARKER|DB_PATH|DRAFTS_DB_PATH|DRAFT_MODE|PEPPER)|NODE_ENV)=.+' | sed 's/=.*//' || true)
+          bad=$(env | grep -E '^(MATRA_(COUNSELOR_ROSTER_PUBKEY|DEMO_MODE|OPRF_[A-Z_]+|ATTESTATION_[A-Z_]+|MATCHER_[A-Z_]+|VOICE_HARNESS|MARKER|DATES_FOUND|DB_PATH|DRAFTS_DB_PATH|DRAFT_MODE|PEPPER)|NODE_ENV)=.+' | sed 's/=.*//' || true)
           if [ -n "$bad" ]; then
             echo "These variables must be unset for the unit tests:"; echo "$bad"; exit 1
           fi

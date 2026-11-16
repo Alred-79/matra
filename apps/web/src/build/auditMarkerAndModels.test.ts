@@ -22,7 +22,7 @@ const AUDIT = path.resolve(ROOT, 'scripts', 'audit-web-build.mjs');
 function cleanEnv(extra: Record<string, string>) {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env))
-    if (v !== undefined && !/^MATRA_(MATCHING|MARKER|DEMO_MODE|VOICE_HARNESS|ATTESTATION_PLATFORM_PUBKEY|MATCHER_MEASUREMENT|COUNSELOR_ROSTER_PUBKEY|OPRF_\w+)$/.test(k)) env[k] = v;
+    if (v !== undefined && !/^MATRA_(MATCHING|MARKER|DATES_FOUND|DEMO_MODE|VOICE_HARNESS|ATTESTATION_PLATFORM_PUBKEY|MATCHER_MEASUREMENT|COUNSELOR_ROSTER_PUBKEY|OPRF_\w+)$/.test(k)) env[k] = v;
   return { ...env, ...extra };
 }
 const audit = (dist: string) => spawnSync(process.execPath, [AUDIT, dist], { env: cleanEnv({}), encoding: 'utf8' });
@@ -69,6 +69,23 @@ describe('build audit: the span-marker is left out of a default build', () => {
     expect(audit(out).stderr).toMatch(/licenses\/Apache-2\.0\.txt: missing from the build/);
     fs.copyFileSync(path.join(WEB, 'public/licenses/Apache-2.0.txt'), path.join(out, 'licenses/Apache-2.0.txt'));
     expect(audit(out).status).toBe(0);
+    // The OCR engine's code (tesseract.js worker script and wasm core) is built in as the pinned bytes too, and is never in
+    // /models/ (only the language data is). A tampered built-in copy fails the audit.
+    const ocr = manifest.models.find((m) => m.id === 'tesseract/eng-best-int')!;
+    for (const b of ocr.bundled!) {
+      const hit = walk(out).filter((f) => path.relative(out, f).startsWith('assets/') && createHash('sha256').update(fs.readFileSync(f)).digest('hex') === b.sha256);
+      expect(hit, b.path).toHaveLength(1);
+      const orig = fs.readFileSync(hit[0]!);
+      fs.appendFileSync(hit[0]!, '\n// swapped');
+      expect(audit(out).stderr, b.path).toMatch(new RegExp(`no file equal to the pinned ${b.package.replace('.', '\\.')}/`));
+      fs.writeFileSync(hit[0]!, orig);
+    }
+    expect(audit(out).status).toBe(0);
+    // none of the dates-found strings is in a default build
+    expect(ok.stdout).toMatch(/no dates-found code \(MATRA_DATES_FOUND=off\)/);
+    for (const f of walk(out).filter((x) => /\.(js|mjs|html|css|json)$/.test(x)))
+      for (const sx of ['Dates found in your files', 'text-in-image', 'file-metadata']) expect(fs.readFileSync(f, 'utf8'), `${f} ${sx}`).not.toContain(sx);
+    expect(JSON.parse(fs.readFileSync(path.join(out, 'matra-dates.json'), 'utf8'))).toEqual({ datesFound: 'off' });
 
     // a swapped /models/ glue is a build failure, and so is a tampered built-in copy
     fs.mkdirSync(path.join(out, 'models/ort'), { recursive: true });
@@ -125,6 +142,31 @@ describe('build audit: licence-text hosts are allowed only inside licenses/*.txt
       fs.rmSync(d, { recursive: true, force: true });
     }
   });
+});
+
+describe('build audit: "dates found in your files" is only in a build that asks for it', () => {
+  it('MATRA_DATES_FOUND=on puts it in the build, and the audit then skips its absence check', () => {
+    const out = path.join(WEB, 'node_modules', '.audit-dates-on');
+    const r = spawnSync(VITE, ['build', '--outDir', out, '--emptyOutDir', '--logLevel', 'error'], {
+      cwd: WEB,
+      env: cleanEnv({ NODE_ENV: 'production', MATRA_MATCHING: 'off', MATRA_DATES_FOUND: 'on', MATRA_COUNSELOR_ROSTER_PUBKEY: Buffer.alloc(32, 7).toString('base64') }),
+      encoding: 'utf8',
+      timeout: 180_000,
+    });
+    if (r.status !== 0) throw new Error(`vite build failed: ${r.stderr}${r.stdout}`);
+    expect(JSON.parse(fs.readFileSync(path.join(out, 'matra-dates.json'), 'utf8'))).toEqual({ datesFound: 'on' });
+    const all = walk(out).filter((x) => /\.js$/.test(x)).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+    expect(all).toContain('Dates found in your files');
+    const a = audit(out);
+    expect(a.status).toBe(0);
+    expect(a.stdout).toMatch(/MATRA_DATES_FOUND=on: check skipped/);
+    fs.rmSync(out, { recursive: true, force: true });
+  }, 300_000);
+  it('a bad value stops the build', () => {
+    const r = spawnSync(VITE, ['build', '--outDir', path.join(WEB, 'node_modules', '.audit-dates-bad'), '--logLevel', 'error'], { cwd: WEB, env: cleanEnv({ NODE_ENV: 'production', MATRA_DATES_FOUND: 'maybe' }), encoding: 'utf8', timeout: 60_000 });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr + r.stdout).toMatch(/MATRA_DATES_FOUND must be "off" or "on"/);
+  }, 120_000);
 });
 
 describe('build audit: dist/models is exactly the pinned files', () => {

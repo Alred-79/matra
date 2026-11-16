@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MANIFEST, modelById, type Manifest, type ModelEntry } from '../manifest';
-import { IntegrityError, sha256Hex } from '../verify';
+import { sha256Hex } from '../verify';
 import { ORIGIN, enc, envFor, fakeFetch } from '../testkit.test-util';
-import { OCR_MODEL_ID, OcrUnavailableError, assertOcrCodeUrls, readTextFromImage, type TesseractLike } from './engine';
+import { OCR_MODEL_ID, OcrUnavailableError, assertOcrCodeUrls, readTextFromImage, type WorkerLike } from './engine';
 
 const LANG = enc('pretend this is gzipped english data');
 async function setup(served?: Record<string, Uint8Array | { status: number }>) {
@@ -13,21 +13,34 @@ async function setup(served?: Record<string, Uint8Array | { status: number }>) {
     dtype: 'lstm-int8',
     base: '/models/tesseract/eng-best-int/',
     cacheName: 'ml-model-ocr-test',
-    files: [{ path: 'eng.traineddata.gz', size: LANG.length, sha256: await sha256Hex(LANG) }],
+    files: [{ path: 'eng.traineddata.bin', size: LANG.length, sha256: await sha256Hex(LANG) }],
   };
   const manifest: Manifest = { ...MANIFEST, models: [model] };
-  const fetchImpl = fakeFetch(served ?? { '/models/tesseract/eng-best-int/eng.traineddata.gz': LANG });
+  const fetchImpl = fakeFetch(served ?? { '/models/tesseract/eng-best-int/eng.traineddata.bin': LANG });
   return { model, manifest, fetchImpl, env: envFor(manifest, fetchImpl) };
 }
 
 const CODE = { worker: '/assets/worker.min-abc123.js', core: '/assets/tesseract-core-simd-lstm.wasm-def456.js' };
 
-function fakeTesseract(text: string) {
-  const terminate = vi.fn(async () => {});
-  const recognize = vi.fn(async () => ({ data: { text } }));
-  const createWorker = vi.fn(async () => ({ recognize, terminate }));
-  const t: TesseractLike = { createWorker, OEM: { LSTM_ONLY: 1 } };
-  return { t, createWorker, recognize, terminate };
+/** A worker that speaks the tesseract.js worker script's protocol, answering every job, and records what it was sent. */
+function fakeWorker(text: string, opts: { failAt?: string } = {}) {
+  const sent: Array<{ action: string; payload: any }> = [];
+  const terminate = vi.fn();
+  const w: WorkerLike = {
+    onmessage: null,
+    onerror: null,
+    terminate,
+    postMessage(m: any) {
+      sent.push({ action: m.action, payload: m.payload });
+      queueMicrotask(() => {
+        const reply = (status: string, data: unknown) => w.onmessage?.({ data: { jobId: m.jobId, workerId: m.workerId, action: m.action, status, data } });
+        if (opts.failAt === m.action) return reply('reject', 'Error: boom');
+        if (m.action === 'recognize') reply('progress', { status: 'recognizing text', progress: 0.5 });
+        reply('resolve', m.action === 'recognize' ? { text } : { ok: true });
+      });
+    },
+  };
+  return { w, sent, terminate, spawn: vi.fn((_url: string) => w) };
 }
 const image = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
 
@@ -35,41 +48,49 @@ describe('on-device text reading', () => {
   it('returns the engine’s text exactly: no cleanup, correction, trimming or summary', async () => {
     const odd = '  Thsi  is  a recipt \n\n  Total:  $ 12 .50\t\n  Pay by 03/04/2O26 \n';
     const { env, model } = await setup();
-    const f = fakeTesseract(odd);
-    const res = await readTextFromImage(image, { env, model, tesseract: f.t, codeUrls: CODE });
+    const f = fakeWorker(odd);
+    const res = await readTextFromImage(image, { env, model, spawnWorker: f.spawn, codeUrls: CODE });
     expect(res.text).toBe(odd);
     expect(res.engine).toMatch(/tesseract/i);
   });
 
-  it('gives the engine the verified language data as bytes, our own build files as code, no CDN, no blob: worker, no IndexedDB copy', async () => {
+  it('starts the worker from our own build file and gives it the verified language data as bytes, the core as a file, no CDN, no IndexedDB copy', async () => {
     const { env, model, fetchImpl } = await setup();
-    const f = fakeTesseract('x');
-    await readTextFromImage(image, { env, model, tesseract: f.t, codeUrls: CODE });
-    const [langs, oem, options] = f.createWorker.mock.calls[0] as unknown as [Array<{ code: string; data: Uint8Array }>, number, Record<string, unknown>];
-    expect(langs).toHaveLength(1);
-    expect(langs[0]!.code).toBe('eng');
-    expect(Array.from(langs[0]!.data)).toEqual(Array.from(LANG));
-    expect(oem).toBe(1);
-    expect(options).toMatchObject({ workerPath: CODE.worker, corePath: CODE.core, workerBlobURL: false, cacheMethod: 'none' });
-    expect(String(options.corePath).endsWith('js')).toBe(true); // a file, so the engine never picks (or fetches) a default
+    const f = fakeWorker('x');
+    const progress: string[] = [];
+    await readTextFromImage(image, { env, model, spawnWorker: f.spawn, codeUrls: CODE, onProgress: (p) => progress.push(p.status) });
+    expect(f.spawn).toHaveBeenCalledWith(CODE.worker);
+    expect(f.sent.map((m) => m.action)).toEqual(['load', 'loadLanguage', 'initialize', 'recognize']);
+    const [load, lang, init, rec] = f.sent.map((m) => m.payload);
+    expect(load.options).toMatchObject({ lstmOnly: true, logging: false });
+    expect(String(load.options.corePath)).toBe(`${ORIGIN}${CODE.core}`);
+    expect(String(load.options.corePath).endsWith('js')).toBe(true); // a file, so the engine never picks a default (a CDN)
+    expect(lang.langs).toHaveLength(1);
+    expect(lang.langs[0].code).toBe('eng');
+    expect(Array.from(lang.langs[0].data)).toEqual(Array.from(LANG));
+    expect(lang.options).toMatchObject({ cacheMethod: 'none', gzip: true });
+    expect(init).toMatchObject({ langs: 'eng', oem: 1 }); // the NAME, not the bytes
+    expect(Array.from(rec.image)).toEqual([1, 2, 3]);
+    expect(rec.output).toEqual({ text: true });
     // the only request made was for the pinned language file, on our own origin
-    expect(fetchImpl.calls).toEqual(['/models/tesseract/eng-best-int/eng.traineddata.gz']);
+    expect(fetchImpl.calls).toEqual(['/models/tesseract/eng-best-int/eng.traineddata.bin']);
     expect(f.terminate).toHaveBeenCalledTimes(1);
+    expect(progress).toContain('Reading the text…');
   });
 
   it('refuses language data that is not the pinned file: nothing is read and no engine is started', async () => {
     const tampered = new Uint8Array(LANG);
     tampered[0] ^= 1;
-    const { env, model } = await setup({ '/models/tesseract/eng-best-int/eng.traineddata.gz': tampered });
-    const f = fakeTesseract('x');
-    await expect(readTextFromImage(image, { env, model, tesseract: f.t, codeUrls: CODE })).rejects.toBeInstanceOf(IntegrityError);
-    expect(f.createWorker).not.toHaveBeenCalled();
+    const { env, model } = await setup({ '/models/tesseract/eng-best-int/eng.traineddata.bin': tampered });
+    const f = fakeWorker('x');
+    await expect(readTextFromImage(image, { env, model, spawnWorker: f.spawn, codeUrls: CODE })).rejects.toMatchObject({ name: 'OcrUnavailableError', message: expect.stringMatching(/did not pass its safety check/) });
+    expect(f.spawn).not.toHaveBeenCalled();
     // a short file too
-    const short = await setup({ '/models/tesseract/eng-best-int/eng.traineddata.gz': LANG.slice(0, 5) });
-    await expect(readTextFromImage(image, { env: short.env, model: short.model, tesseract: fakeTesseract('x').t, codeUrls: CODE })).rejects.toBeInstanceOf(IntegrityError);
+    const short = await setup({ '/models/tesseract/eng-best-int/eng.traineddata.bin': LANG.slice(0, 5) });
+    await expect(readTextFromImage(image, { env: short.env, model: short.model, spawnWorker: fakeWorker('x').spawn, codeUrls: CODE })).rejects.toBeInstanceOf(OcrUnavailableError);
     // and a missing one
     const gone = await setup({});
-    await expect(readTextFromImage(image, { env: gone.env, model: gone.model, tesseract: fakeTesseract('x').t, codeUrls: CODE })).rejects.toBeInstanceOf(IntegrityError);
+    await expect(readTextFromImage(image, { env: gone.env, model: gone.model, spawnWorker: fakeWorker('x').spawn, codeUrls: CODE })).rejects.toMatchObject({ message: expect.stringMatching(/not part of this copy/) });
   });
 
   it('refuses code that is not a build asset of this app: a /models/ file, another origin, a CDN', () => {
@@ -80,15 +101,17 @@ describe('on-device text reading', () => {
 
   it('reports an engine that will not start as unavailable, with the worker ended; her file is untouched', async () => {
     const { env, model } = await setup();
-    const terminate = vi.fn(async () => {});
-    const t: TesseractLike = {
-      OEM: { LSTM_ONLY: 1 },
-      createWorker: async () => ({ recognize: async () => Promise.reject('Failed to load TesseractCore'), terminate }),
-    };
-    const err = await readTextFromImage(image, { env, model, tesseract: t, codeUrls: CODE }).catch((e) => e);
-    expect(err).toBeInstanceOf(OcrUnavailableError);
-    expect(String(err.message)).toMatch(/Your file is not affected/);
-    expect(terminate).toHaveBeenCalled();
+    for (const failAt of ['load', 'loadLanguage', 'initialize', 'recognize']) {
+      const f = fakeWorker('x', { failAt });
+      const err = await readTextFromImage(image, { env, model, spawnWorker: f.spawn, codeUrls: CODE }).catch((e) => e);
+      expect(err, failAt).toBeInstanceOf(OcrUnavailableError);
+      expect(String(err.message)).toMatch(/Your file is not affected/);
+      expect(f.terminate, failAt).toHaveBeenCalled();
+    }
+    // a worker that dies
+    const dead = fakeWorker('x');
+    dead.w.postMessage = () => queueMicrotask(() => dead.w.onerror?.({ message: 'script error' }));
+    await expect(readTextFromImage(image, { env, model, spawnWorker: () => dead.w, codeUrls: CODE })).rejects.toBeInstanceOf(OcrUnavailableError);
   });
 
   it('the real manifest pins the OCR data and both code files, with a licence-checked npm source', () => {
