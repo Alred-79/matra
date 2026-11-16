@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidenceItem } from '@matra/shared';
-import { buildExhibits, csvCell, exhibitListCsv, exhibitNumbersById, fingerprintsById, redactedCopyDescription, redactedCopyLabel } from './exhibits';
+import { buildExhibits, csvCell, exhibitListCsv, exhibitNumbersByBlob, fingerprintsById, MissingFilesError, numberExhibits, redactedCopyDescription, redactedCopyLabel } from './exhibits';
 import { EvidenceIndex, fold } from './search';
 import { originalBlobIds, type PrivateItem } from './privateStore';
 
@@ -93,14 +93,26 @@ describe('one numbering: files that cannot be traced to an item take no number',
     expect(buildExhibits.length).toBe(3);
   });
 
-  it('does not list an original that went up but was never linked (it is recognised by the hash reserved before it was sent)', () => {
+  it('hides nothing because of what the server reports: a malicious server naming one of her real exhibits as a pending original cannot remove it from the list', () => {
     const H = 'e'.repeat(64);
-    const blobs = [blob('i1', '2026-11-01T10:00:00Z'), { id: 'b-stray-orig', createdAt: '2026-11-01T10:00:01Z', sizeBytes: 9, contentHash: H }, blob('i2', '2026-11-02T10:00:00Z')];
-    const list = buildExhibits(blobs, [item('i1', 'a.png'), item('i2', 'b.png')], { i1: { originalPending: { ciphertextSha256: H } } });
-    expect(list.map((e) => e.number)).toEqual([1, 2]);
-    expect(originalBlobIds({ i1: { originalPending: { ciphertextSha256: H } } }, blobs).has('b-stray-orig')).toBe(true);
-    // an unreserved blob with a different hash is not mistaken for it
-    expect(originalBlobIds({ i1: { originalPending: { ciphertextSha256: 'f'.repeat(64) } } }, blobs).has('b-stray-orig')).toBe(false);
+    // the server reports the content hash of her real exhibit i2 as the hash her item i1 reserved for its original
+    const blobs = [{ ...blob('i1', '2026-11-01T10:00:00Z'), contentHash: 'a'.repeat(64) }, { ...blob('i2', '2026-11-02T10:00:00Z'), contentHash: H }, { ...blob('i3', '2026-11-03T10:00:00Z'), contentHash: 'b'.repeat(64) }];
+    const items = [item('i1', 'a.png'), item('i2', 'b.png'), item('i3', 'c.png')];
+    const priv = { i1: { originalPending: { ciphertextSha256: H } } };
+    expect(buildExhibits(blobs, items, priv).map((e) => [e.number, e.fileName])).toEqual([[1, 'a.png'], [2, 'b.png'], [3, 'c.png']]);
+    expect(originalBlobIds(priv).size).toBe(0); // a hash alone puts no blob in the set
+  });
+
+  it('recognises an original by the blob id HER record saved (linked, or noted when the upload returned), and by nothing else', () => {
+    expect(originalBlobIds({ a: { originalBlobId: 'b-1' }, b: { originalPending: { ciphertextSha256: 'e'.repeat(64), blobId: 'b-2' } }, c: { originalPending: { ciphertextSha256: 'f'.repeat(64) } } })).toEqual(new Set(['b-1', 'b-2']));
+  });
+
+  it('reports a file the story lists but the server did not list, instead of numbering around it', () => {
+    const blobs = [blob('i1', '2026-11-01T10:00:00Z'), blob('i3', '2026-11-03T10:00:00Z')];
+    const n = numberExhibits(blobs, [item('i1', 'a.png'), item('i2', 'gone.png'), item('i3', 'c.png')], {});
+    expect(n.exhibits.map((e) => e.fileName)).toEqual(['a.png', 'c.png']);
+    expect(n.missing.map((m) => m.fileName)).toEqual(['gone.png']);
+    expect(new MissingFilesError(['gone.png']).message).toMatch(/Nothing was made/);
   });
 
   it('resolves derivedFrom against this same list: a redacted copy names the exhibit that is on the screen', () => {
@@ -113,6 +125,6 @@ describe('one numbering: files that cannot be traced to an item take no number',
     expect(list[0]!.redactedCopyOf).toBeUndefined();
     // a copy of a file that is not in the list points at nothing rather than at a wrong number
     expect(buildExhibits(blobs, items, { i3: { derivedFrom: 'gone' } })[2]!.redactedCopyOf).toBeUndefined();
-    expect(exhibitNumbersById(list)).toEqual({ i1: 1, i2: 2, i3: 3 });
+    expect(exhibitNumbersByBlob(list)).toEqual({ 'b-i1': 1, 'b-i2': 2, 'b-i3': 3 });
   });
 });

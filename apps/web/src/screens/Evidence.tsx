@@ -11,19 +11,19 @@ import { friendlyError, useRequiredSession } from '../lib/session';
 import {
   blobKeyFor,
   formatBytes,
-  legacyDraftEvidence,
   loadSpace,
   mergeEvidence,
   openEvidence,
   resumeFrom,
   shortHash,
+  spaceEvidence,
   uploadEvidence,
   vaultError,
 } from '../lib/vault';
 import { SlotConflictError, currentDraftMode, saveDraftSlot } from '../lib/draftSlot';
 import { DatesFoundSection } from '../evidence/DatesFoundSection';
 import { DATES_FOUND_IN_BUILD } from '../evidence/datesFlag';
-import { buildExhibits, type Exhibit } from '../evidence/exhibits';
+import { numberExhibits, type Exhibit } from '../evidence/exhibits';
 import { BlurredImage, ExhibitSection, OcrControl, RedactControl, readableType } from '../evidence/EvidencePanels';
 import { FINGERPRINT_NOTE, IMPORT_FORMAT_NOTICE } from '../evidence/formats';
 import { emptyPrivate, loadPrivate, originalBlobIds, type PrivateEvidence, type PrivateItem } from '../evidence/privateStore';
@@ -93,7 +93,7 @@ export function Evidence() {
     ]);
     const resume = resumeFrom(slot.slot, vault);
     const final = resume.final;
-    const meta = mergeEvidence(legacyDraftEvidence(vault), resume.evidence, final?.payload.record?.evidence, mem?.evidence);
+    const meta = spaceEvidence(vault, slot.slot, mem?.evidence); // the one set her files are numbered from
     return {
       blobs,
       meta,
@@ -197,8 +197,8 @@ export function Evidence() {
   const priv = existing.data?.priv ?? emptyPrivate();
   const canKeepOriginal = existing.data?.canKeepOriginal ?? false;
   // a kept original is a second file that belongs to the file it came from, so it is not listed on its own
-  const originalIds = originalBlobIds(priv.items, existing.data?.blobs ?? []);
-  const exhibits = buildExhibits(existing.data?.blobs ?? [], existing.data?.meta ?? [], priv.items);
+  const originalIds = originalBlobIds(priv.items);
+  const { exhibits, missing } = numberExhibits(existing.data?.blobs ?? [], existing.data?.meta ?? [], priv.items);
   const exhibitByBlob = new Map(exhibits.map((e) => [e.blobId, e]));
 
   return (
@@ -377,6 +377,12 @@ export function Evidence() {
       </section>
       )}
 
+      {!existing.error && existing.data && missing.length > 0 && (
+        <p className="small card soft" role="status" data-testid="exhibit-missing">
+          Your story lists {missing.length === 1 ? 'a file' : `${missing.length} files`} that we can’t find stored right now ({missing.map((m) => m.fileName).join(', ')}).
+          The numbers below only count files we can find.
+        </p>
+      )}
       {!existing.error && existing.data && <ExhibitSection exhibits={exhibits} />}
       {DATES_FOUND_IN_BUILD && existing.data && (
         <DatesFoundSection

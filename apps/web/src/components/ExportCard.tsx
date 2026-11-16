@@ -20,7 +20,7 @@ export function ExportCard({
   /** extra content at the bottom of the card */
   children?: ReactNode;
 }) {
-  const { api, session } = useRequiredSession();
+  const { api, session, getWorkingData } = useRequiredSession();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
@@ -32,7 +32,7 @@ export function ExportCard({
     try {
       // loaded on demand: most visits never export, so the zip code stays out of the home screen
       const { buildDataExport, downloadBytes } = await import('../lib/export');
-      const out = await buildDataExport(api, session.masterKey, session.user.username);
+      const out = await buildDataExport(api, session.masterKey, session.user.username, new Date(), (await getWorkingData())?.evidence);
       downloadBytes(out.zip, out.fileName, 'application/zip');
       setDone(
         `Downloaded ${out.fileName}: ${plural(out.recordCount, 'saved version')} and ${plural(out.evidenceCount, 'evidence file')}.` +

@@ -525,6 +525,16 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
 }
 
 /**
+ * THE set of file details (names, types) known for her space: what every drafted version, every sealed version, her draft
+ * slot and (when the caller has it) the working copy in memory say about her files, merged by stored file. The Evidence
+ * screen, the incident summary and the data export all number her files from this one set (evidence/exhibits.ts).
+ */
+export function spaceEvidence(vault: readonly OpenedRecord[], slot: LoadedDraftSlot | null, working?: EvidenceItem[]): EvidenceItem[] {
+  const oldestFirst = [...vault].sort((a, b) => a.meta.createdAt.localeCompare(b.meta.createdAt));
+  return mergeEvidence(...oldestFirst.flatMap((r) => [r.payload.evidence, r.payload.record?.evidence]), slot?.value.evidence, working);
+}
+
+/**
  * The story's working copy, plus any files the in-memory working data has that it doesn't (details saved by the
  * Evidence page after the story opened). Her draft stays the story's own; the slot version follows the newer save.
  * Returns null when there is nothing new.

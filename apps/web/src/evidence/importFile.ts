@@ -10,15 +10,17 @@
  *      copy and upload it with ONLY the commitment (the plain hash and the salt never leave her device unencrypted)
  *
  * There is no way to delete a file once it is on the server (blobs are write-once; the only route that removes any is
- * deleting the whole account), so a stored original can never be "taken back". The reservation is what stops it becoming a
- * stray: if the upload went through but the link could not be saved, the blob is still recognised as this file's original
- * (originalBlobIds), is not listed as an exhibit, and she is told plainly that a copy may still be stored.
+ * deleting the whole account), so a stored original can never be "taken back", and she is never told one was not kept unless
+ * the server provably refused it. The blob's id is written into the reservation the moment the upload returns it, so if the
+ * full link then fails, her own record still names it; after a dropped connection or a timeout the reservation stays, the
+ * blob list is checked, and she is told a copy may still be stored. Nothing is hidden or renamed because of what the server
+ * reports about a blob (see exhibits.ts, privateStore.ts originalBlobIds).
  *
  * It does not interpret the file: no caption, no objects, no faces.
  */
 import { encryptBlob, generateContentKey, randomId, sha256Hex, wrapKeyWithMaster } from '@matra/crypto';
 import type { EvidenceItem, EvidenceKind, LedgerEntry, WrappedKey } from '@matra/shared';
-import type { ApiClient } from '../api/client';
+import { ApiError, type ApiClient } from '../api/client';
 import { mirror } from '../dev/mirror';
 import { stripMetadata } from '../lib/metadata';
 import { commit, hashOriginal, newSalt } from './commitment';
@@ -44,6 +46,8 @@ export const ORIGINAL_NOT_KEPT = ' Your original was NOT kept here either, so pl
  * Said when the original went up but could not be linked to its file: it cannot be taken off the server from here, so she is
  * told a locked copy may be there. (For advocates to review.)
  */
+export const ORIGINAL_KEEP_ON_DEVICE = ' Please keep your original on your device.';
+export const ORIGINAL_NOT_SEEN = ' We checked and could not see a copy of your original in your space. Please keep it on your device.';
 export const ORIGINAL_MAY_BE_STORED =
   ' A locked copy of your original may still be stored in your space. Only you can open it, it is not shared, and it is listed with this file in your export, but this version of Matra cannot remove it.';
 
@@ -69,6 +73,18 @@ export interface UploadedEvidence {
   privateNote: string | null;
   ledgerEntry: LedgerEntry;
   commitmentEntry?: LedgerEntry;
+}
+
+/** The server answered "no" before storing anything (a validation or permission refusal). A dropped connection, a timeout or a server error is NOT this: the file may have arrived. */
+const provablyNotStored = (e: unknown): boolean => e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
+
+/** Is a blob with exactly this ciphertext hash listed? (A fresh random IV makes it unique to this attempt.) undefined when the list cannot be read. Only informs what she is told. */
+async function copyIsListed(api: ApiClient, ciphertextSha256: string): Promise<boolean | undefined> {
+  try {
+    return (await api.listBlobs()).blobs.some((b) => b.contentHash === ciphertextSha256);
+  } catch {
+    return undefined;
+  }
 }
 
 const omitPending = ({ originalPending: _p, ...rest }: PrivateItem): PrivateItem => rest;
@@ -150,35 +166,42 @@ export async function importEvidence(api: ApiClient, masterKey: CryptoKey, file:
       return finish(undefined, `We couldn’t save the private fingerprint of this file’s original (${(e as Error).message}).${wantsOriginal ? ORIGINAL_NOT_KEPT : ''} The file itself is added.`);
     }
     if (kept && priv) {
+      const ciphertextSha256 = priv.originalPending!.ciphertextSha256;
+      const save = async (item: PrivateItem): Promise<boolean> => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            await setPrivateItem(api, masterKey, id, item);
+            return true;
+          } catch {
+            /* try once more */
+          }
+        }
+        return false;
+      };
       let uploaded: string | undefined;
       try {
         uploaded = (await api.uploadBlob(kept.ct, kept.wrapped)).blob.id;
       } catch (e) {
-        // nothing went up, so nothing is stored; take the reservation back (if that fails it names no blob, which is harmless)
-        const { originalPending: _reserved, ...withoutReservation } = priv;
-        priv = withoutReservation;
-        await setPrivateItem(api, masterKey, id, priv).catch(() => undefined);
-        finalNote = `We couldn’t keep the original (${(e as Error).message}).${ORIGINAL_NOT_KEPT}`;
+        if (provablyNotStored(e)) {
+          // the server refused it before storing anything: take the reservation back (if that fails it names no blob: harmless)
+          priv = omitPending(priv);
+          await setPrivateItem(api, masterKey, id, priv).catch(() => undefined);
+          finalNote = `We couldn’t keep the original (${(e as Error).message}).${ORIGINAL_NOT_KEPT}`;
+        } else {
+          // a dropped connection or a timeout: the file may have arrived. The reservation stays; look, and say only what we know.
+          const seen = await copyIsListed(api, ciphertextSha256);
+          finalNote = `We couldn’t confirm the original was saved (${(e as Error).message}).${seen === false ? ORIGINAL_NOT_SEEN : ORIGINAL_MAY_BE_STORED + ORIGINAL_KEEP_ON_DEVICE}`;
+        }
       }
       if (uploaded) {
+        // 1. note the blob in the reservation as soon as the upload returns it, so even if the full link below fails her own
+        //    record still says which blob this was (never inferred from what the server reports)
+        const recorded: PrivateItem = { ...priv, originalPending: { ciphertextSha256, blobId: uploaded } };
+        if (await save(recorded)) priv = recorded;
+        // 2. link it
         const linked: PrivateItem = { ...omitPending(priv), originalBlobId: uploaded };
-        let linkError: Error | undefined;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            await setPrivateItem(api, masterKey, id, linked);
-            linkError = undefined;
-            break;
-          } catch (e) {
-            linkError = e as Error;
-          }
-        }
-        if (linkError) {
-          // Uploaded, not linked, and not removable. The reservation still names it, so it is not a stray; say so plainly.
-          // (`priv` keeps the reservation and no link: the screen offers no "download the original" for it.)
-          finalNote = `We couldn’t finish keeping the original (${linkError.message}).${ORIGINAL_MAY_BE_STORED}${ORIGINAL_NOT_KEPT}`;
-        } else {
-          priv = linked;
-        }
+        if (await save(linked)) priv = linked;
+        else finalNote = `We couldn’t finish keeping the original.${ORIGINAL_MAY_BE_STORED}${ORIGINAL_KEEP_ON_DEVICE}`;
       }
     }
   }

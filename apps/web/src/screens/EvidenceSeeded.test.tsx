@@ -105,7 +105,7 @@ describe('Evidence: exhibit numbers on the screen', () => {
     const privName = await slotName(s.masterKey, 'evidence-private');
     const at = '2026-11-16T00:00:00Z';
     slots.set(draftName, { name: draftName, ...(await sealSlot({ kind: 'draft', slotVersion: 1, evidence, savedAt: at }, s.masterKey)), version: 'a'.repeat(32), updatedDay: '2026-11-16' } as Slot);
-    slots.set(privName, { name: privName, ...(await sealSlot({ kind: 'evidence-private', v: 1, savedAt: at, items: { iA: { originalPending: { ciphertextSha256: PENDING } }, iB: { derivedFrom: 'iA' } } }, s.masterKey)), version: 'a'.repeat(32), updatedDay: '2026-11-16' } as Slot);
+    slots.set(privName, { name: privName, ...(await sealSlot({ kind: 'evidence-private', v: 1, savedAt: at, items: { iA: { originalPending: { ciphertextSha256: PENDING, blobId: blobs[2]!.id } }, iB: { derivedFrom: 'iA' } } }, s.masterKey)), version: 'a'.repeat(32), updatedDay: '2026-11-16' } as Slot);
     rerender(
       <Harness fetchImpl={fetchImpl as unknown as typeof fetch}>
         <MemoryRouter>
@@ -120,7 +120,7 @@ describe('Evidence: exhibit numbers on the screen', () => {
     expect(within(table).getByTestId('exhibit-row-1')).toHaveTextContent('receipt.png');
     expect(within(table).getByTestId('exhibit-row-2')).toHaveTextContent('Redacted copy of exhibit 1');
     expect(within(table).queryByTestId('exhibit-row-3')).toBeNull();
-    // the unlinked original is not listed as a file of its own, the unnamed one still is (as a locked file, no number)
+    // the original her own record names (the id saved when its upload returned) is not listed as a file of its own; the unnamed one still is (as a locked file, no number). The server's hash for a blob never hides it.
     expect(within(screen.getByTestId('evidence-in-space')).getAllByText('Locked file')).toHaveLength(1);
   }, 60_000);
 });

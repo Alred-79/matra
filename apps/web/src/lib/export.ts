@@ -3,9 +3,10 @@
  * (STORE-only, see ./zip). The server is not told what is exported; it only serves the same ciphertext
  * it always does. The resulting file is NOT encrypted — the UI warns her before creating it.
  */
+import type { EvidenceItem } from '@matra/shared';
 import type { ApiClient } from '../api/client';
 import { createZip, safeFileName, type ZipEntry } from './zip';
-import { DRAFT_PROBLEM_ID, blobKeyFor, loadSpace, mergeEvidence, openEvidence, type VaultProblem } from './vault';
+import { DRAFT_PROBLEM_ID, blobKeyFor, loadSpace, openEvidence, spaceEvidence, type VaultProblem } from './vault';
 import { matchingApi } from '../api/matching';
 import { escrowLabel } from './matching';
 import { buildExhibits, exhibitListCsv } from '../evidence/exhibits';
@@ -71,7 +72,14 @@ To check a file has not changed, compute its SHA-256 and compare it with the man
   Windows:      certutil -hashfile <file> SHA256
 `;
 
-export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alias: string, now: Date = new Date()): Promise<DataExport> {
+export async function buildDataExport(
+  api: ApiClient,
+  masterKey: CryptoKey,
+  alias: string,
+  now: Date = new Date(),
+  /** the file details the Evidence screen also holds in memory (session working data), so every view numbers the same set */
+  workingEvidence?: EvidenceItem[],
+): Promise<DataExport> {
   const at = now.toISOString();
   // A copy of what she has, so it reads partially (`allowPartial`), and says what is left out and why.
   const [{ vault, slot, problems: loadProblems }, { blobs }, escrow, shares, audit] = await Promise.all([
@@ -98,37 +106,55 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     }));
 
   const itemByBlob = new Map(
-    mergeEvidence(slot.slot?.value.evidence, ...vault.flatMap((r) => [r.payload.evidence, r.payload.record?.evidence]))
+    spaceEvidence(vault, slot.slot, workingEvidence)
       .filter((e) => e.blobId)
       .map((e) => [e.blobId!, e]),
   );
 
   // The evidence reader's private details (when they opened): which files are kept originals, and what only she holds.
   const priv = await loadPrivate(api, masterKey).catch(() => null);
+  // Kept originals, by what HER record says (the blob id saved when the upload returned it, or the link). Nothing the server
+  // reports (a content hash) decides this alone.
   const originalOf = new Map<string, string>(); // kept original's blob id -> the file it is the original of
+  // A lead only: an original whose id was never saved, matched by the ciphertext hash reserved before it was sent. Followed
+  // only for a blob no file claims, only when exactly one blob carries that hash, and only after the decrypted bytes are
+  // checked against the original's own hash; anything less is marked "probable" in the manifest and never renamed.
+  const leads = new Map<string, { fileName: string; originalSha256?: string; alone: boolean }>();
   if (priv && !priv.unreadable)
     for (const [itemId, p] of Object.entries(priv.value.items)) {
       const parent = [...itemByBlob.values()].find((e) => e.id === itemId);
       if (!parent) continue;
       if (p.originalBlobId) originalOf.set(p.originalBlobId, parent.fileName);
-      // an original that went up but whose link was never saved: still recognised, by the hash reserved before it was sent
-      if (p.originalPending) for (const b of blobs) if (b.contentHash === p.originalPending.ciphertextSha256) originalOf.set(b.id, parent.fileName);
+      if (p.originalPending?.blobId) originalOf.set(p.originalPending.blobId, parent.fileName);
+      if (p.originalPending && !p.originalBlobId && !p.originalPending.blobId) {
+        const same = blobs.filter((b) => b.contentHash === p.originalPending!.ciphertextSha256);
+        for (const b of same) if (!itemByBlob.has(b.id)) leads.set(b.id, { fileName: parent.fileName, originalSha256: p.originalSha256, alone: same.length === 1 });
+      }
     }
-
+  // an item whose stored file the server did not list: said in the problems, not numbered around
+  const listedBlobs = new Set(blobs.map((b) => b.id));
   const entries: ZipEntry[] = [];
   const manifest: unknown[] = [];
   const problems: string[] = [];
+  for (const m of [...itemByBlob.values()].filter((e) => !listedBlobs.has(e.blobId!)))
+    problems.push(`${m.fileName}: your story lists this file but it is not among your stored files, so it has no exhibit number`);
   let i = 0;
   for (const b of [...blobs].sort((x, y) => x.createdAt.localeCompare(y.createdAt))) {
     i++;
     const item = itemByBlob.get(b.id);
-    const originalFor = originalOf.get(b.id);
-    // a blob tied to no file in her list is kept in the archive (nothing of hers is left out) but apart, and never numbered
-    const unattributed = !item && !originalFor;
-    const name = `evidence/${unattributed ? 'unattributed/' : ''}${String(i).padStart(3, '0')}-${safeFileName(originalFor ? `original-of-${originalFor}` : (item?.fileName ?? `${b.id}.bin`))}`;
+    let originalFor = originalOf.get(b.id);
+    const lead = item ? undefined : leads.get(b.id);
+    let attribution: 'verified' | 'probable' | undefined;
     try {
       const key = await blobKeyFor(b, masterKey);
       const { bytes, hash, verified } = await openEvidence(api, key, b.id, item?.sha256);
+      if (lead) {
+        if (lead.alone && lead.originalSha256 && hash === lead.originalSha256) (originalFor = lead.fileName), (attribution = 'verified');
+        else attribution = 'probable';
+      }
+      // a blob tied to no file in her list is kept in the archive (nothing of hers is left out) but apart, and never numbered
+      const unattributed = !item && !originalFor;
+      const name = `evidence/${unattributed ? 'unattributed/' : ''}${String(i).padStart(3, '0')}-${safeFileName(originalFor ? `original-of-${originalFor}` : (item?.fileName ?? `${b.id}.bin`))}`;
       entries.push({ name, data: bytes, date: new Date(b.createdAt) });
       if (verified === false) problems.push(`${item?.fileName ?? b.id}: SHA-256 does not match the value recorded when it was added`);
       manifest.push({
@@ -136,11 +162,14 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
         sizeBytes: bytes.byteLength, sha256: hash, recordedSha256: item?.sha256, sha256Matches: verified,
         description: item?.description, capturedAt: item?.capturedAt, metadataStripped: item?.metadataStripped,
         addedToVaultAt: b.createdAt, ledgerEntryId: b.ledgerEntryId,
+        ...(originalFor && { originalOf: originalFor }),
+        ...(attribution && { attribution }),
+        ...(attribution === 'probable' && lead && { possibleOriginalOf: lead.fileName, attributionNote: 'Probably the kept original of this file (matched by a hash the server reports), but it could not be confirmed, so it is kept apart and not renamed.' }),
         ...(unattributed && { attributedToAFile: false }),
       });
     } catch (e) {
       problems.push(`${item?.fileName ?? b.id}: could not be decrypted (${e instanceof Error ? e.message : 'unknown error'})`);
-      manifest.push({ file: null, blobId: b.id, fileName: item?.fileName, error: 'could not be decrypted', addedToVaultAt: b.createdAt });
+      manifest.push({ file: null, blobId: b.id, fileName: item?.fileName, error: 'could not be decrypted', addedToVaultAt: b.createdAt, ...(lead && { possibleOriginalOf: lead.fileName }) });
     }
   }
 

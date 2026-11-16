@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sealSlot, sha256Hex, slotName } from '@matra/crypto';
+import { ApiError } from '../api/client';
 import { setDraftMode } from '../lib/draftSlot';
 import { commit, hashOriginal, isHex64, newSalt, verifyCommitment, verifyOriginal } from './commitment';
 import { importEvidence } from './importFile';
@@ -200,13 +201,13 @@ describe('importing a file (PR 31)', () => {
       expect(r.details).toBeNull();
     });
 
-    it('when the original itself fails to upload: the file and its fingerprint stand, she is told, and no original is offered', async () => {
+    it('when the server refuses the original’s upload: the file and its fingerprint stand, she is told, and no original is offered', async () => {
       const { masterKey } = await testKeys();
       const { api, uploads } = fakeApi();
       const real = api.uploadBlob.bind(api);
       let n = 0;
       (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
-        if (++n === 1) throw new Error('upload failed');
+        if (++n === 1) throw new ApiError(413, 'too large', 'payload_too_large'); // the server refused it before storing anything
         return real(ct, wk, c);
       };
       const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
@@ -240,6 +241,7 @@ describe('importing a file (PR 31)', () => {
         };
         const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
         expect(reservedAtUpload).toMatchObject({ originalPending: { ciphertextSha256: await sha256Hex(uploads[0]!.ct) } });
+        expect((reservedAtUpload as { originalPending: { blobId?: string } }).originalPending.blobId).toBeUndefined();
         expect((reservedAtUpload as { originalBlobId?: string }).originalBlobId).toBeUndefined();
         const saved = Object.values((await loadPrivate(api, masterKey)).value.items)[0]!;
         expect(saved.originalBlobId).toBe(String(1).padStart(32, '0'));
@@ -257,30 +259,43 @@ describe('importing a file (PR 31)', () => {
         expect(r.privateNote).toBeNull();
       });
 
-      it('the link keeps failing: she is told a copy may still be stored, it is still recognised as the file’s original, and it is not an exhibit', async () => {
+      it('the link fails but the blob id was noted when the upload returned: her own record still names it, and she is told a copy may be stored', async () => {
         const { masterKey } = await testKeys();
         const { api, uploads } = fakeApi();
-        failingPuts(api, [2, 3]);
+        failingPuts(api, [3, 4]); // reservation ok, blob id noted ok, the link fails twice
         const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
         expect(uploads).toHaveLength(2); // the original went up, then the file
         expect(r.privateNote).toMatch(MAY_BE_STORED);
-        expect(r.privateNote).toMatch(NOT_KEPT);
+        expect(r.privateNote).toMatch(/keep your original on your device/);
+        expect(r.privateNote).not.toMatch(NOT_KEPT); // it may well be stored: never "not kept"
         expect(r.details?.originalBlobId).toBeUndefined(); // nothing to download or call kept
-        // what the server's list would show for the stored original: its content hash is the one reserved beforehand
-        const originalBlob = { id: String(1).padStart(32, '0'), createdAt: '2026-11-16T00:00:00.000Z', sizeBytes: uploads[0]!.ct.length, contentHash: await sha256Hex(uploads[0]!.ct) };
-        const copyBlob = { id: r.item.blobId!, createdAt: '2026-11-16T00:00:01.000Z', sizeBytes: 5, contentHash: 'c'.repeat(64) };
-        const priv = (await loadPrivate(api, masterKey)).value.items;
-        expect(originalBlobIds(priv, [originalBlob, copyBlob])).toEqual(new Set([originalBlob.id]));
-        expect(buildExhibits([originalBlob, copyBlob], [r.item], priv).map((e) => [e.number, e.blobId])).toEqual([[1, copyBlob.id]]);
+        const originalId = String(1).padStart(32, '0');
+        const saved = Object.values((await loadPrivate(api, masterKey)).value.items)[0]!;
+        expect(saved.originalPending?.blobId).toBe(originalId);
+        expect(originalBlobIds({ x: saved }).has(originalId)).toBe(true);
+        // not an exhibit
+        const blobs = [{ id: originalId, createdAt: '2026-11-16T00:00:00.000Z', sizeBytes: 5 }, { id: r.item.blobId!, createdAt: '2026-11-16T00:00:01.000Z', sizeBytes: 5 }];
+        expect(buildExhibits(blobs, [r.item], { x: saved }).map((e) => [e.number, e.blobId])).toEqual([[1, r.item.blobId]]);
       });
 
-      it('the original’s upload fails: nothing is stored, the reservation is taken back, and she is told', async () => {
+      it('nothing could be saved after the upload: she is still told a copy may be stored, and the file’s own details are not rewritten', async () => {
+        const { masterKey } = await testKeys();
+        const { api } = fakeApi();
+        failingPuts(api, [2, 3, 4, 5]);
+        const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+        expect(r.privateNote).toMatch(MAY_BE_STORED);
+        expect(r.privateNote).not.toMatch(NOT_KEPT);
+        expect(r.details?.originalBlobId).toBeUndefined();
+        expect(r.details?.commitment).toBeDefined();
+      });
+
+      it('the original’s upload is refused (a 4xx): provably nothing stored, so the reservation is taken back and she is told it was not kept', async () => {
         const { masterKey } = await testKeys();
         const { api, uploads } = fakeApi();
         const real = api.uploadBlob.bind(api);
         let n = 0;
         (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
-          if (++n === 1) throw new Error('upload failed');
+          if (++n === 1) throw new ApiError(413, 'too large', 'payload_too_large');
           return real(ct, wk, c);
         };
         const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
@@ -288,6 +303,65 @@ describe('importing a file (PR 31)', () => {
         expect(r.privateNote).toMatch(NOT_KEPT);
         expect(r.privateNote).not.toMatch(MAY_BE_STORED);
         expect(Object.values((await loadPrivate(api, masterKey)).value.items)[0]!.originalPending).toBeUndefined();
+      });
+
+      describe('the upload fails in a way that does not say whether it arrived (dropped connection, timeout, server error)', () => {
+        /** the original's upload is stored by the "server" and then the reply is lost */
+        const lostReply = (api: ReturnType<typeof fakeApi>['api'], error: Error) => {
+          const real = api.uploadBlob.bind(api);
+          let n = 0;
+          (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
+            const res = await real(ct, wk, c);
+            if (++n === 1) throw error;
+            return res;
+          };
+        };
+
+        it('it did arrive: she is told the original may still be stored, never that it was not kept, and the reservation stays', async () => {
+          const { masterKey } = await testKeys();
+          const { api } = fakeApi();
+          lostReply(api, new ApiError(0, 'We could not reach the server.', 'network'));
+          const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+          expect(r.privateNote).toMatch(MAY_BE_STORED);
+          expect(r.privateNote).not.toMatch(NOT_KEPT);
+          expect(Object.values((await loadPrivate(api, masterKey)).value.items)[0]!.originalPending).toBeDefined();
+          expect(r.details?.originalBlobId).toBeUndefined();
+        });
+
+        it('a 5xx and a timeout are no different from a dropped connection', async () => {
+          const { masterKey } = await testKeys();
+          for (const err of [new ApiError(500, 'oops'), new ApiError(408, 'timeout'), new Error('aborted')]) {
+            const { api } = fakeApi();
+            lostReply(api, err);
+            const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+            expect(r.privateNote, String(err)).toMatch(MAY_BE_STORED);
+            expect(r.privateNote, String(err)).not.toMatch(NOT_KEPT);
+          }
+        });
+
+        it('the list cannot be read either: still "may be stored"', async () => {
+          const { masterKey } = await testKeys();
+          const { api } = fakeApi();
+          lostReply(api, new ApiError(0, 'down', 'network'));
+          (api as unknown as { listBlobs: () => Promise<never> }).listBlobs = async () => Promise.reject(new Error('down'));
+          const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+          expect(r.privateNote).toMatch(MAY_BE_STORED);
+        });
+
+        it('it did not arrive and the list shows no copy: she is told no copy was seen, still without "not kept", and the reservation stays', async () => {
+          const { masterKey } = await testKeys();
+          const { api } = fakeApi();
+          const real = api.uploadBlob.bind(api);
+          let n = 0;
+          (api as unknown as { uploadBlob: typeof real }).uploadBlob = async (ct, wk, c) => {
+            if (++n === 1) throw new ApiError(0, 'We could not reach the server.', 'network'); // nothing stored
+            return real(ct, wk, c);
+          };
+          const r = await importEvidence(api, masterKey, file(rand(100), 'a.jpg', 'image/jpeg'), { keepOriginal: true });
+          expect(r.privateNote).toMatch(/could not see a copy of your original in your space/);
+          expect(r.privateNote).not.toMatch(NOT_KEPT);
+          expect(Object.values((await loadPrivate(api, masterKey)).value.items)[0]!.originalPending).toBeDefined();
+        });
       });
 
       it('an original is only ever uploaded after its reservation was saved: if the reservation fails, no original goes up', async () => {

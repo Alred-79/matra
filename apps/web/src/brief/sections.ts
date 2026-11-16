@@ -55,9 +55,9 @@ function safeMethods(r: IntakeRecord): string {
  * Survivor-authored text is carried through byte-for-byte (never trimmed, rewritten or summarised).
  */
 /** The evidence rows in exhibit-number order (numbered first, the rest after in their own order), when numbers are given. */
-function orderedEvidence<T extends { id: string }>(evidence: readonly T[], numbers?: Record<string, number>): T[] {
+function orderedEvidence<T extends { blobId?: string }>(evidence: readonly T[], numbers?: Record<string, number>): T[] {
   if (!numbers) return [...evidence];
-  const n = (e: T) => numbers[e.id] ?? Number.POSITIVE_INFINITY;
+  const n = (e: T) => (e.blobId ? numbers[e.blobId] : undefined) ?? Number.POSITIVE_INFINITY;
   return evidence.map((e, i) => ({ e, i })).sort((a, b) => n(a.e) - n(b.e) || a.i - b.i).map((x) => x.e);
 }
 
@@ -325,7 +325,7 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
           ],
           rows: orderedEvidence(r.evidence, opts.exhibitNumbers).map((e, i) => ({
             cells: [
-              opts.exhibitNumbers ? (opts.exhibitNumbers[e.id] !== undefined ? String(opts.exhibitNumbers[e.id]) : '–') : String(i + 1), e.fileName || NOT_PROVIDED, EVIDENCE_KIND_LABELS[e.kind] ?? e.kind, orNP(e.description),
+              opts.exhibitNumbers ? (e.blobId && opts.exhibitNumbers[e.blobId] !== undefined ? String(opts.exhibitNumbers[e.blobId]) : '–') : String(i + 1), e.fileName || NOT_PROVIDED, EVIDENCE_KIND_LABELS[e.kind] ?? e.kind, orNP(e.description),
               formatDate(e.capturedAt), formatBytes(e.sizeBytes), e.metadataStripped ? 'Yes' : 'No',
             ],
             detail: opts.exhibitFingerprints?.[e.id]

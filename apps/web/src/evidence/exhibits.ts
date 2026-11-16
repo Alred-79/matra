@@ -9,7 +9,7 @@
 import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { EVIDENCE_KIND_LABELS } from '../brief/format';
 import { formatBytes } from '../lib/vault';
-import { originalBlobIds, type PrivateItem } from './privateStore';
+import type { PrivateItem } from './privateStore';
 
 export interface Exhibit {
   number: number;
@@ -34,7 +34,7 @@ export interface Exhibit {
   ocrText?: string;
 }
 
-type BlobLike = Pick<BlobMeta, 'id' | 'createdAt' | 'sizeBytes'> & Partial<Pick<BlobMeta, 'contentHash'>>;
+type BlobLike = Pick<BlobMeta, 'id' | 'createdAt' | 'sizeBytes'>;
 
 /**
  * THE numbering. Every place that shows or prints an exhibit number (the Evidence screen, the exhibit list and its CSV, the
@@ -44,8 +44,10 @@ type BlobLike = Pick<BlobMeta, 'id' | 'createdAt' | 'sizeBytes'> & Partial<Pick<
  * Her files in the order the server sealed them (blobs arrive oldest first), numbered from 1. A blob that cannot be traced
  * to a file she has details for (another device saved its draft first, or an upload that was never finished) gets NO number
  * and is not listed: it is not one of her exhibits, so it must not take a number away from one. A kept original (a second
- * encrypted file) belongs to its file and is not an exhibit of its own. `derivedFrom` is turned into a number here, from this
- * same list, so a redacted copy always names the exhibit the reader sees.
+ * encrypted file) has no file details of its own, so it is never numbered either. A blob is hidden only for lacking a file
+ * entry in HER encrypted details, never because of anything the server reports about it (its hash, size or time), so the
+ * server cannot choose which of her files are listed. `derivedFrom` is turned into a number here, from this same list, so a
+ * redacted copy always names the exhibit the reader sees.
  */
 export function buildExhibits(
   blobs: readonly BlobLike[],
@@ -53,12 +55,11 @@ export function buildExhibits(
   priv: Readonly<Record<string, PrivateItem>>,
 ): Exhibit[] {
   const byBlob = new Map(items.filter((i) => i.blobId).map((i) => [i.blobId!, i]));
-  const originals = originalBlobIds(priv, blobs);
   const ordered = [...blobs].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
   const out: Exhibit[] = [];
   for (const b of ordered) {
     const item = byBlob.get(b.id);
-    if (!item || originals.has(b.id)) continue;
+    if (!item) continue;
     const p = priv[item.id];
     out.push({
       number: out.length + 1,
@@ -84,8 +85,31 @@ export function buildExhibits(
   });
 }
 
-/** Item id -> exhibit number, for anything that prints a number beside a file (the PDF). */
-export const exhibitNumbersById = (list: readonly Exhibit[]): Record<string, number> => Object.fromEntries(list.map((e) => [e.id, e.number]));
+/** Stored file (blob id) -> exhibit number, for anything that prints a number beside a file (the PDF). */
+export const exhibitNumbersByBlob = (list: readonly Exhibit[]): Record<string, number> => Object.fromEntries(list.map((e) => [e.blobId, e.number]));
+
+export interface Numbering {
+  exhibits: Exhibit[];
+  /** file details that name a stored file the server did not list: not an exhibit, and not something to number around silently */
+  missing: EvidenceItem[];
+}
+
+/** buildExhibits, plus the file details whose stored file is not in the server's list (so nobody renumbers around a gap unseen). */
+export function numberExhibits(blobs: readonly BlobLike[], items: readonly EvidenceItem[], priv: Readonly<Record<string, PrivateItem>>): Numbering {
+  const listed = new Set(blobs.map((b) => b.id));
+  return { exhibits: buildExhibits(blobs, items, priv), missing: items.filter((i) => i.blobId && !listed.has(i.blobId)) };
+}
+
+/** Said, plainly, instead of a list or summary whose numbers could be wrong. */
+export class MissingFilesError extends Error {
+  readonly friendly = true;
+  constructor(readonly names: string[]) {
+    super(
+      `We couldn’t find ${names.length === 1 ? 'a stored file' : 'some stored files'} that your story lists (${names.join(', ')}), so we can’t number your files reliably right now. Nothing was made. Please try again in a moment.`,
+    );
+    this.name = 'MissingFilesError';
+  }
+}
 
 /** The commitments by item id, for the PDF's Evidence Inventory. */
 export const fingerprintsById = (list: readonly Exhibit[]): Record<string, string> =>

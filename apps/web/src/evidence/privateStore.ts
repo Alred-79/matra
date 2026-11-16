@@ -48,11 +48,13 @@ export interface PrivateItem {
   /** the second encrypted file holding her unstripped original, when she chose to keep it (off by default) */
   originalBlobId?: string;
   /**
-   * Written BEFORE the original is uploaded: the SHA-256 of its ciphertext (what the server records as the blob's content
-   * hash). If the upload goes through but linking `originalBlobId` fails, this is how that blob is still recognised as this
-   * file's original rather than as a stray. Dropped once `originalBlobId` is saved.
+   * Written BEFORE the original is uploaded, and kept until `originalBlobId` is saved: `ciphertextSha256` is the SHA-256 of its
+   * ciphertext (what the server records as the blob's content hash), and `blobId` is added as soon as the upload returns one.
+   * It exists so an original whose link was never saved can still be recognised as hers, from HER record and not from what
+   * the server reports: `blobId` is what the screen goes by; `ciphertextSha256` is only a lead the data export may follow, and
+   * only after decrypting the blob and checking its bytes against `originalSha256` (lib/export.ts).
    */
-  originalPending?: { ciphertextSha256: string };
+  originalPending?: { ciphertextSha256: string; blobId?: string };
   /** set on a redacted copy: the id of the exhibit it was made from (the original is never changed) */
   derivedFrom?: string;
   /** date strings the original file's metadata held, as written (kept only in a build with "dates found in your files") */
@@ -130,7 +132,7 @@ function sanitize(v: unknown): PrivateEvidence | null {
       ...(typeof raw.originalType === 'string' && { originalType: raw.originalType }),
       ...(typeof raw.importedAt === 'string' && { importedAt: raw.importedAt }),
       ...(typeof raw.originalBlobId === 'string' && { originalBlobId: raw.originalBlobId }),
-      ...(isObject(raw.originalPending) && isHex64(raw.originalPending.ciphertextSha256) && { originalPending: { ciphertextSha256: raw.originalPending.ciphertextSha256 } }),
+      ...(isObject(raw.originalPending) && isHex64(raw.originalPending.ciphertextSha256) && { originalPending: { ciphertextSha256: raw.originalPending.ciphertextSha256, ...(typeof raw.originalPending.blobId === 'string' && { blobId: raw.originalPending.blobId }) } }),
       ...(ocr && { ocr }),
     };
   }
@@ -195,17 +197,15 @@ export const setPrivateOcr = (api: ApiClient, masterKey: CryptoKey, itemId: stri
   });
 
 /**
- * Blobs that are kept originals of her files: the ones an item links (`originalBlobId`), and the ones an item reserved
- * (`originalPending`) whose link was never saved. Matched by the blob's content hash.
+ * Blobs her own record says are kept originals: the one an item links (`originalBlobId`) and the one it recorded when the
+ * upload returned (`originalPending.blobId`). Nothing the server says about a blob (hash, size, time) puts a blob in this set.
  */
-export function originalBlobIds(items: Readonly<Record<string, PrivateItem>>, blobs: ReadonlyArray<{ id: string; contentHash?: string }>): Set<string> {
+export function originalBlobIds(items: Readonly<Record<string, PrivateItem>>): Set<string> {
   const out = new Set<string>();
-  const pending = new Set<string>();
   for (const p of Object.values(items)) {
     if (p.originalBlobId) out.add(p.originalBlobId);
-    if (p.originalPending) pending.add(p.originalPending.ciphertextSha256);
+    if (p.originalPending?.blobId) out.add(p.originalPending.blobId);
   }
-  for (const b of blobs) if (b.contentHash && pending.has(b.contentHash)) out.add(b.id);
   return out;
 }
 

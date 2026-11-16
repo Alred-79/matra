@@ -20,9 +20,9 @@ export interface BriefOptions {
    */
   exhibitFingerprints?: Record<string, string>;
   /**
-   * Evidence item id -> its exhibit number, from the one numbering (src/evidence/exhibits.ts buildExhibits), so the number
+   * Stored file (blob id) -> its exhibit number, from the one numbering (src/evidence/exhibits.ts buildExhibits), so the number
    * printed here is the number on her screen and in her exhibit list. When given, rows are ordered by it and a file with no
-   * number shows "–"; when absent, rows are simply counted in the order of the record (callers with no file list).
+   * number (it was never stored) shows "–"; when absent, rows are simply counted in the order of the record (callers with no file list).
    */
   exhibitNumbers?: Record<string, number>;
 }
