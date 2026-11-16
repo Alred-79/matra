@@ -304,11 +304,11 @@ export function Evidence() {
                     <span className={u.item.metadataStripped ? 'badge ok' : 'badge warn'}>
                       {u.item.metadataStripped ? 'Hidden details removed' : 'Hidden details not removed'}
                     </span>
-                    {u.item.kind === 'screenshot' && <span className="badge neutral">Screenshot</span>}
+                    {(u.details?.screenshotLikely || u.item.kind === 'screenshot') && <span className="badge neutral">Screenshot</span>}
                   </div>
                   <p className="small">{u.note}</p>
                   {u.warning && <p className="small" role="note" data-testid="unstripped-warning">{u.warning}</p>}
-                  {u.item.kind === 'screenshot' && (
+                  {(u.details?.screenshotLikely || u.item.kind === 'screenshot') && (
                     <p className="small" data-testid="screenshot-note">
                       Its name or size matches a screenshot’s. Please keep the original messages on your phone too.
                     </p>
@@ -450,7 +450,7 @@ function VaultFile({
         <div className="row">
           <strong style={{ overflowWrap: 'anywhere' }}>{exhibit ? `${exhibit.number}. ` : ''}{meta?.fileName ?? 'Locked file'}</strong>
           {inFinal ? <span className="badge sage">In your sealed story</span> : <span className="badge neutral">Not in your sealed story yet</span>}
-          {meta?.kind === 'screenshot' && <span className="badge neutral">Screenshot</span>}
+          {(details?.screenshotLikely || meta?.kind === 'screenshot') && <span className="badge neutral">Screenshot</span>}
           {view && <VerifyBadge verified={view.verified} />}
         </div>
         <p className="small muted">
