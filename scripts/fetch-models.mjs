@@ -7,6 +7,10 @@
  *   npm run fetch-models              download what is missing, verify everything (sha256 + size)
  *   node scripts/fetch-models.mjs --check   verify only; exit 1 if anything is missing or wrong
  *   MATRA_SKIP_MODELS=1 npm run build       build without voice (the app falls back to typing)
+ *   MATRA_SKIP_OCR=1 npm run build          build without on-device text reading (OCR)
+ *
+ * Models with a `source` (the OCR language data) are not downloaded: they are copied from the installed npm package, which
+ * must match the pinned size and hash. The OCR code (`bundled`) is built into the app, so here it is only checked.
  *
  * Idempotent: files already present with the right hash are left alone. Downloads go to a .part file
  * and are only moved into place after the hash matches. Pinned revisions, sizes and hashes: apps/web/src/ml/manifest.json (the browser checks them again before use).
@@ -26,10 +30,11 @@ const CHECK_ONLY = process.argv.includes('--check');
 
 const mb = (n) => `${(n / 1e6).toFixed(1)} MB`;
 
-if (process.env.MATRA_SKIP_MODELS === '1') {
-  console.warn('[fetch-models] MATRA_SKIP_MODELS=1: skipping. Voice transcription will be unavailable in this build.');
-  process.exit(0);
-}
+const SKIP_VOICE = process.env.MATRA_SKIP_MODELS === '1';
+const SKIP_OCR = process.env.MATRA_SKIP_OCR === '1';
+if (SKIP_VOICE) console.warn('[fetch-models] MATRA_SKIP_MODELS=1: skipping voice. Voice transcription will be unavailable in this build.');
+if (SKIP_OCR) console.warn('[fetch-models] MATRA_SKIP_OCR=1: skipping. Reading text from images will be unavailable in this build.');
+if (SKIP_VOICE && SKIP_OCR) process.exit(0);
 
 async function sha256File(file) {
   const hash = createHash('sha256');
@@ -83,6 +88,11 @@ async function main() {
   const problems = [];
 
   for (const model of MANIFEST.models) {
+    if (model.source ? SKIP_OCR : SKIP_VOICE) continue;
+    if (model.source) {
+      await copyNpmModel(model, problems);
+      continue;
+    }
     const modelDir = path.join(OUT, model.id);
     console.log(`[fetch-models] ${model.id}@${model.revision.slice(0, 10)} (${model.dtype}) -> ${path.relative(ROOT, OUT)}/`);
     for (const f of model.files) {
@@ -113,6 +123,52 @@ async function main() {
     }
   }
 
+  if (!SKIP_VOICE) await ortRuntime(problems);
+  await finish(problems);
+}
+
+/** A model whose files come from an installed npm package (the OCR language data). Must equal the pin; copied, never downloaded. */
+async function copyNpmModel(model, problems) {
+  const req = createRequire(path.join(ROOT, 'apps/web/package.json'));
+  let pkgDir = path.dirname(req.resolve(`${model.source.package}/package.json`));
+  const version = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version;
+  if (version !== model.source.version) {
+    console.error(`  installed ${model.source.package} ${version} is not the pinned ${model.source.version}; update src/ml/manifest.json (sizes and sha256) with it`);
+    process.exit(1);
+  }
+  console.log(`[fetch-models] ${model.id} (${model.task}, from ${model.source.package}@${version}) -> ${path.relative(ROOT, OUT)}/`);
+  for (const f of model.files) {
+    const src = path.join(pkgDir, model.source.path, f.path);
+    const dest = path.join(OUT, model.id, f.path);
+    if (!(await isGood(src, f.size, f.sha256))) {
+      console.error(`  installed ${model.source.package}/${model.source.path}/${f.path} does not match the pinned size/sha256 in src/ml/manifest.json`);
+      process.exit(1);
+    }
+    if (await isGood(dest, f.size, f.sha256)) {
+      console.log(`  ok        ${f.path} (${mb(f.size)})`);
+      continue;
+    }
+    if (CHECK_ONLY) {
+      problems.push(`${model.id}/${f.path}`);
+      console.log(`  MISSING   ${f.path}`);
+      continue;
+    }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+    console.log(`  copied    ${f.path} (${mb(f.size)})`);
+  }
+  // the OCR code is built into the app: the installed copy must be the pinned one
+  for (const b of model.bundled ?? []) {
+    const file = path.join(path.dirname(req.resolve(`${b.package}/package.json`)), b.path);
+    if (!(await isGood(file, b.size, b.sha256))) {
+      console.error(`  installed ${b.package}/${b.path} (built into the app) does not match the pinned size/sha256 in src/ml/manifest.json`);
+      process.exit(1);
+    }
+    console.log(`  ok        ${b.package}/${b.path} (${mb(b.size)}, built into the app)`);
+  }
+}
+
+async function ortRuntime(problems) {
   // ONNX Runtime wasm: copy from the installed onnxruntime-web, which is exactly what the app bundle was built with.
   // The copy must match the pinned size and hash in the manifest: if onnxruntime-web is upgraded, the manifest is updated
   // in the same change (a mismatch fails the build rather than shipping a runtime nobody pinned).
@@ -153,6 +209,10 @@ async function main() {
     fs.copyFileSync(src, dest);
     console.log(`  copied    ort/${name} (${mb(f.size)})`);
   }
+}
+
+async function finish(problems) {
+  const ortFiles = MANIFEST.runtime.files.map((f) => f.path);
   // Files nobody pinned (stale ORT files from earlier versions, stray downloads) are never served by accident:
   // removed on a normal run, reported by --check.
   const pinned = new Set([
@@ -177,9 +237,12 @@ async function main() {
     console.error(`[fetch-models] ${problems.length} file(s) missing, invalid or not pinned. Run: npm run fetch-models`);
     process.exit(1);
   }
-  const bytes = MANIFEST.models.flatMap((m) => m.files).reduce((n, f) => n + f.size, 0);
+  const bytes = MANIFEST.models.filter((m) => (m.source ? !SKIP_OCR : !SKIP_VOICE)).flatMap((m) => m.files).reduce((n, f) => n + f.size, 0);
   const runtime = (role) => MANIFEST.runtime.files.find((f) => f.role === role).size;
-  console.log(`[fetch-models] ready: models ${mb(bytes)}, runtime ${mb(runtime('cpu-wasm'))} (cpu) / ${mb(runtime('webgpu-wasm'))} (webgpu)`);
+  console.log(
+    `[fetch-models] ready: models ${mb(bytes)}` +
+      `${SKIP_VOICE ? ' (voice skipped)' : `, runtime ${mb(runtime('cpu-wasm'))} (cpu) / ${mb(runtime('webgpu-wasm'))} (webgpu)`}${SKIP_OCR ? ' (ocr skipped)' : ''}`,
+  );
 }
 
 main().catch((e) => {

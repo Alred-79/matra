@@ -15,9 +15,21 @@ export interface PinnedFile {
 export interface RuntimeFile extends PinnedFile {
   role: 'cpu-wasm' | 'webgpu-wasm';
 }
+/** A code file of a model's runtime that is built into the app (content-hashed under /assets/), not fetched at run time. */
+export interface ModelBundledFile extends PinnedFile {
+  role: 'ocr-worker' | 'ocr-core';
+  package: string;
+  version: string;
+  /** path inside the installed package */
+  path: string;
+}
 export interface ModelEntry {
   id: string;
   task: string;
+  /** Present when the files are copied from an installed npm package at build time instead of downloaded. */
+  source?: { type: 'npm'; package: string; version: string; path: string };
+  /** Code this model's runtime runs, built into the app and pinned at build time. */
+  bundled?: ModelBundledFile[];
   revision: string;
   dtype: string;
   /** Origin-relative directory the model's files are served from, with a trailing slash. */

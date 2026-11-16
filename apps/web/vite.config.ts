@@ -74,6 +74,33 @@ function noticeShipped(): Plugin {
 }
 
 /**
+ * The OCR engine's code (the tesseract.js worker script and its WebAssembly core, src/ml/ocr/engine.ts) is built INTO the
+ * app like the ORT glue above: the browser starts it from a URL and cannot check what it runs, so what ships must be the
+ * files pinned in src/ml/manifest.json (models[].bundled). A build fails if the installed copy is not that file.
+ */
+function ocrCodePinned(): Plugin {
+  return {
+    name: 'matra:ocr-code-pinned',
+    apply: 'build',
+    enforce: 'pre',
+    async buildStart() {
+      const { createHash } = await import('node:crypto');
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      const { createRequire } = await import('node:module');
+      const req = createRequire(import.meta.url);
+      for (const model of manifest.models as Array<{ bundled?: Array<{ package: string; path: string; size: number; sha256: string }> }>)
+        for (const pin of model.bundled ?? []) {
+          const file = path.join(path.dirname(req.resolve(`${pin.package}/package.json`)), pin.path);
+          const bytes = fs.readFileSync(file);
+          if (bytes.length !== pin.size || createHash('sha256').update(bytes).digest('hex') !== pin.sha256)
+            throw new Error(`${pin.package}/${pin.path} (built into the app) does not match the size/sha256 pinned in src/ml/manifest.json. Update the pin with the dependency, in one change.`);
+        }
+    },
+  };
+}
+
+/**
  * MATRA_MATCHING=off|on (one switch, also read by the app server; @matra/shared matching-mode.ts). Off — the pilot
  * default — builds the app WITHOUT sealed matching: `__MATRA_MATCHING__` is a literal false, so the matching screens,
  * the escrow and match-contact questions, the phone step, the counselor portal and their API calls are left out of the
@@ -104,6 +131,15 @@ if (!MATCHING_IN_BUILD) {
 const markerRaw = (process.env.MATRA_MARKER ?? '').trim().toLowerCase();
 if (markerRaw && markerRaw !== 'on' && markerRaw !== 'off') throw new Error(`MATRA_MARKER must be "off" or "on", got "${process.env.MATRA_MARKER}"`);
 const MARKER_IN_BUILD = markerRaw === 'on';
+
+/**
+ * MATRA_DATES_FOUND=off|on (default off): whether "dates found in your files" (src/evidence/datesFound.ts) is in the build.
+ * The plan shows it only after her narrative is sealed (P2, not built) and only on request (counsel question Q-074), so it
+ * is a literal false in a default build and its strings are left out (scripts/audit-web-build.mjs checks).
+ */
+const datesRaw = (process.env.MATRA_DATES_FOUND ?? '').trim().toLowerCase();
+if (datesRaw && datesRaw !== 'on' && datesRaw !== 'off') throw new Error(`MATRA_DATES_FOUND must be "off" or "on", got "${process.env.MATRA_DATES_FOUND}"`);
+const DATES_IN_BUILD = datesRaw === 'on';
 
 /**
  * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set them all, so the app
@@ -216,6 +252,7 @@ export function assertProductionPins(o: {
  */
 export const BUILD_INFO_FILE = 'matra-build.json';
 export const MARKER_INFO_FILE = 'matra-marker.json';
+export const DATES_INFO_FILE = 'matra-dates.json';
 function matraBuildInfo(): Plugin {
   return {
     name: 'matra:build-info',
@@ -224,12 +261,13 @@ function matraBuildInfo(): Plugin {
       this.emitFile({ type: 'asset', fileName: BUILD_INFO_FILE, source: JSON.stringify({ matching: MATCHING_IN_BUILD ? 'on' : 'off' }) + '\n' });
       // a separate file, so matra-build.json (which the server cross-checks) keeps its one meaning
       this.emitFile({ type: 'asset', fileName: MARKER_INFO_FILE, source: JSON.stringify({ marker: MARKER_IN_BUILD ? 'on' : 'off' }) + '\n' });
+      this.emitFile({ type: 'asset', fileName: DATES_INFO_FILE, source: JSON.stringify({ datesFound: DATES_IN_BUILD ? 'on' : 'off' }) + '\n' });
     },
   };
 }
 
 const config = {
-  plugins: [react(), matraBuildInfo(), ortGluePinned(), noticeShipped()],
+  plugins: [react(), matraBuildInfo(), ortGluePinned(), noticeShipped(), ocrCodePinned()],
   define: {
     // a build without sealed matching carries only the org key (attorney directory), not the OPRF pin fields
     __MATRA_MATCH_PINS__: JSON.stringify(MATCHING_IN_BUILD ? matchPins : { rosterKey: matchPins.rosterKey }),
@@ -237,6 +275,7 @@ const config = {
     __MATRA_DEMO__: JSON.stringify(demoBuild),
     __MATRA_MATCHING__: JSON.stringify(MATCHING_IN_BUILD),
     __MATRA_MARKER__: JSON.stringify(MARKER_IN_BUILD),
+    __MATRA_DATES_FOUND__: JSON.stringify(DATES_IN_BUILD),
   },
   // The transcription worker (src/voice/worker.ts) is an ES module worker: it code-splits and uses import.meta.
   worker: { format: 'es', plugins: () => [ortRuntimeFromModels()] },

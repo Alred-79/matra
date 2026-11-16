@@ -20,6 +20,9 @@
  *
  *  5b. The CPU ONNX Runtime JS glue (code the browser cannot check at run time) is built into the app as the pinned bytes.
  *  7. Licence texts and NOTICE ship in the build (licenses/), and NOTICE names the third-party software we distribute.
+ *  5c. The OCR engine's code (tesseract.js worker script and WebAssembly core) is built into the app as the pinned bytes, and
+ *     is not served from /models/ either (the language data is the only OCR file there).
+ *  6b. "Dates found in your files" (src/evidence/datesFound.ts) left out of a MATRA_DATES_FOUND=off build, the default.
  *  6. The span-marker (src/ml/marker) left out of a MATRA_MARKER=off build, which is the default: none of its strings is in
  *     any shipped file. It has no survivor-facing screen in this build, so "on" only matters for the dev-only preview.
  *
@@ -44,6 +47,7 @@ const ALLOWED_HOSTS = {
   'creativecommons.org': 'the CC BY 4.0 licence link in the passphrase word-list credit (NOTICE; a link she can choose to follow)',
   'huggingface.co': 'transformers.js default model host; disabled (env.allowRemoteModels = false, remoteHost overridden; CSP connect-src self)',
   'cdn.jsdelivr.net': 'ONNX Runtime default wasm path; overridden to /models/ort/ (apps/web/src/voice/worker.ts; CSP script-src self)',
+  'opencollective.com': 'the funding link inside tesseract.js’s bundled package.json metadata (a string, never fetched)',
   'react.dev': 'React error-message text',
   'reactrouter.com': 'React Router warning text',
   'github.com': 'library comments / error-message text',
@@ -104,6 +108,15 @@ try {
 } catch {
   /* keep off */
 }
+/** The MATRA_DATES_FOUND this build was made with (matra-dates.json); a build without the file is treated as off. */
+let datesMode = 'off';
+try {
+  datesMode = JSON.parse(fs.readFileSync(path.join(DIST, 'matra-dates.json'), 'utf8')).datesFound === 'on' ? 'on' : 'off';
+} catch {
+  /* keep off */
+}
+/** Strings that exist only in "dates found in your files" (src/evidence/datesFound.ts, DatesFound.tsx). */
+const DATES_ONLY = ['Dates found in your files', 'text-in-image', 'file-metadata'];
 /** Strings that exist only in the marker's code (error-free minification keeps string literals). */
 const MARKER_ONLY = ['understand-rules', 'not-exact-substring', 'sensitive-group', 'reported-speech'];
 
@@ -136,6 +149,9 @@ for (const f of files) {
   // 6. marker left out
   if (markerMode === 'off')
     for (const m of MARKER_ONLY) if (text.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_MARKER=off build`);
+  // 6b. dates found in your files left out
+  if (datesMode === 'off')
+    for (const m of DATES_ONLY) if (text.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_DATES_FOUND=off build`);
   for (const m of text.matchAll(/\b(?:https?|wss?):\/\/([a-z0-9.-]+)/gi)) {
     const h = m[1].toLowerCase().replace(/\.$/, '');
     if (/^licenses\/[^/]+\.txt$/.test(rel(f)) && h in LICENSE_TEXT_HOSTS) continue;
@@ -173,6 +189,16 @@ for (const [h, where] of hosts)
     for (const name of ['EFF Short Wordlist', 'onnxruntime-web', 'Transformers.js', 'whisper-base'])
       if (!text.includes(name)) problems.push(`licenses/NOTICE.txt does not mention ${name}`);
   }
+// 5c. the OCR code is built into the app as the pinned bytes (assets/), for any build of the full app
+{
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'apps/web/src/ml/manifest.json'), 'utf8'));
+  const all = walk(DIST);
+  const fullApp = all.some((f) => /^assets\/index-[^/]*\.js$/.test(rel(f)));
+  for (const model of manifest.models)
+    for (const pin of model.bundled ?? []) {
+      const hit = !fullApp || all.find((f) => rel(f).startsWith('assets/') && fs.statSync(f).size === pin.size && createHash('sha256').update(fs.readFileSync(f)).digest('hex') === pin.sha256);
+      if (!hit) problems.push(`assets/: no file equal to the pinned ${pin.package}/${pin.path} (size ${pin.size}, sha256 ${pin.sha256.slice(0, 12)}...) is built into the app`);
+    }
 }
 
 // 5. models: exactly the pinned files, byte for byte
@@ -208,6 +234,7 @@ if (problems.length) {
 console.log(
   `[audit-web] ok: ${files.length} files, no third-party requests or trackers` +
     `${matchingMode === 'off' ? ', no sealed-matching code (MATRA_MATCHING=off)' : ' (MATRA_MATCHING=on: matching check skipped)'}` +
-    `${markerMode === 'off' ? ', no span-marker code (MATRA_MARKER=off)' : ' (MATRA_MARKER=on: marker check skipped)'}; ` +
+    `${markerMode === 'off' ? ', no span-marker code (MATRA_MARKER=off)' : ' (MATRA_MARKER=on: marker check skipped)'}` +
+    `${datesMode === 'off' ? ', no dates-found code (MATRA_DATES_FOUND=off)' : ' (MATRA_DATES_FOUND=on: check skipped)'}; ` +
     `hosts named: ${[...hosts.keys()].sort().join(', ') || 'none'}`,
 );

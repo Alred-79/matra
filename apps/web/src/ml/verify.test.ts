@@ -48,7 +48,7 @@ describe('the real manifest', () => {
     expect(MANIFEST.runtime.bundled[0].sha256).toMatch(/^[0-9a-f]{64}$/);
   });
   it('uses neutral cache names: no app name, revision-scoped', () => {
-    for (const n of cacheNames()) expect(n).toMatch(/^(speech-model|ml-runtime)-[0-9a-z]+$/);
+    for (const n of cacheNames()) expect(n).toMatch(/^(speech-model|ml-runtime|ml-model)-[0-9a-z-]+$/);
     expect(findPinned('/models/ort/not-listed.wasm')).toBeUndefined();
   });
 });

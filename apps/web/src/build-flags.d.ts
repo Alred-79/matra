@@ -10,3 +10,9 @@ declare const __MATRA_MATCHING__: boolean;
  * copes with it being undefined (the eval harness runs the marker under Node with no bundler).
  */
 declare const __MATRA_MARKER__: boolean;
+
+/**
+ * MATRA_DATES_FOUND=on at build time (vite.config.ts `define`), default off. Read through src/evidence/datesFlag.ts, which
+ * also copes with it being undefined.
+ */
+declare const __MATRA_DATES_FOUND__: boolean;
