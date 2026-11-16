@@ -14,6 +14,11 @@ export interface BriefOptions {
   preparedFor?: string;
   /** Address of the in-browser checker printed in "How to verify" (default: this app's origin + /verify). */
   verifyUrl?: string;
+  /**
+   * Evidence item id -> the SALTED commitment to the hash of the file as she added it (src/evidence/commitment.ts). Listed
+   * in the Evidence Inventory when given. Never a plain hash of the original, and never the salt.
+   */
+  exhibitFingerprints?: Record<string, string>;
 }
 
 export interface BriefRow {

@@ -124,3 +124,49 @@ describe('buildDataExport', () => {
     ]);
   });
 });
+
+describe('buildDataExport: the evidence reader’s lists', () => {
+  it('adds the exhibit list and her private details (salt, original hash, text read), which verify a salted fingerprint', async () => {
+    g.__MATRA_MATCHING__ = false;
+    const { masterKey } = await deriveKeys('export reader test passphrase', newKdfSalt(), 1000);
+    const bytes = new TextEncoder().encode('a stored copy');
+    const blobKey = await generateContentKey();
+    const blob: BlobMeta = { id: 'b'.repeat(32), ownerId: 'u', sizeBytes: 0, contentHash: 'x', createdAt: '2026-08-15T00:00:00Z', ledgerEntryId: 'l2', ownerWrappedKey: await wrapKeyWithMaster(blobKey, masterKey) };
+    const blobCt = await encryptBlob(bytes, blobKey);
+    const original = new TextEncoder().encode('the original');
+    const originalSha = await sha256Hex(original);
+    const salt = '5'.repeat(64);
+    const raw = new Uint8Array(64);
+    for (let i = 0; i < 32; i++) (raw[i] = parseInt(salt.slice(i * 2, i * 2 + 2), 16)), (raw[32 + i] = parseInt(originalSha.slice(i * 2, i * 2 + 2), 16));
+    const commitment = await sha256Hex(raw);
+    const item = { id: 'i1', kind: 'photo', fileName: 'wrists.jpg', mimeType: 'image/jpeg', sizeBytes: bytes.length, sha256: await sha256Hex(bytes), blobId: blob.id, metadataStripped: true };
+    const draft = { name: await slotName(masterKey, 'draft'), ...(await sealSlot({ kind: 'draft', slotVersion: 1, evidence: [item], savedAt: '2026-09-01T00:00:00Z' }, masterKey)), version: '4'.repeat(32), updatedDay: '2026-09-01' };
+    const priv = {
+      name: await slotName(masterKey, 'evidence-private'),
+      ...(await sealSlot({ kind: 'evidence-private', v: 1, savedAt: 'x', items: { i1: { originalSha256: originalSha, salt, commitment, importedAt: '2026-08-14T23:00:00.000Z', ocr: { text: 'Total $12.50', engine: 'tesseract', at: 'z' } } } }, masterKey)),
+      version: '5'.repeat(32),
+      updatedDay: '2026-09-01',
+    };
+    const fake = {
+      listRecords: async () => ({ records: [] }),
+      getRecord: async () => ({ record: undefined }),
+      getSlot: async (name: string) => ({ slot: name === draft.name ? draft : name === priv.name ? priv : null, draftMode: 'slot' }),
+      getLedgerEntry: async () => ({ entry: undefined }),
+      listBlobs: async () => ({ blobs: [blob] }),
+      downloadBlob: async () => blobCt,
+      listShares: async () => ({ shares: [] }),
+      listAudit: async () => ({ events: [] }),
+    } as unknown as ApiClient;
+    const files = unzip((await buildDataExport(fake, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'))).zip);
+    const text = (n: string) => new TextDecoder().decode(files.get(n)!);
+    expect(text('evidence/exhibit-list.csv')).toContain(`"1","wrists.jpg","2026-08-14T23:00:00.000Z","Photo (image/jpeg)"`);
+    expect(text('evidence/exhibit-list.csv')).toContain(commitment);
+    const details = JSON.parse(text('evidence/private-details.json')) as { files: Array<{ originalSha256: string; salt: string; saltedFingerprint: string; textRead: string }> };
+    expect(details.files[0]).toMatchObject({ originalSha256: originalSha, salt, saltedFingerprint: commitment, textRead: 'Total $12.50' });
+    expect(text('README.txt')).toContain('evidence/private-details.json');
+    // the exhibit list (shareable) never holds the salt or the plain hash
+    expect(text('evidence/exhibit-list.csv')).not.toContain(salt);
+    expect(text('evidence/exhibit-list.csv')).not.toContain(originalSha);
+  });
+});
+

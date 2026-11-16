@@ -8,6 +8,8 @@ import { createZip, safeFileName, type ZipEntry } from './zip';
 import { DRAFT_PROBLEM_ID, blobKeyFor, loadSpace, mergeEvidence, openEvidence, type VaultProblem } from './vault';
 import { matchingApi } from '../api/matching';
 import { escrowLabel } from './matching';
+import { buildExhibits, exhibitListCsv } from '../evidence/exhibits';
+import { loadPrivate } from '../evidence/privateStore';
 
 export interface DataExport {
   zip: Uint8Array;
@@ -49,6 +51,15 @@ evidence/manifest.json  One entry per evidence file: original name, type, size, 
                         recorded when you added it, and whether this copy still matches it.
 evidence/...            The evidence files themselves (as stored — with hidden details removed
                         where Matra could do that).
+evidence/exhibit-list.csv   Your files in the order you added them: number, name, date added, type, size
+                        and a salted fingerprint of the original file you chose (if one was kept).
+evidence/private-details.json   What only you hold about each file: the fingerprint of the original, the
+                        secret salt that goes with the salted fingerprint, and any text you had read from
+                        an image. To check a salted fingerprint: SHA-256 of the 32 salt bytes followed by
+                        the 32 bytes of the original file's SHA-256 equals it
+                        (printf '%s' "<salt><original sha256>" | xxd -r -p | shasum -a 256). This shows a
+                        file with those exact bytes existed when you added it; it does not show that the
+                        cleaned copy in this archive came from it. Treat the salt as private.
 ${__MATRA_MATCHING__ ? ESCROW_README : ''}shares.json             Who you shared your file with, the exact consent text, and status.
 activity.json           Your activity log (sign-ins, saves, shares, attorney access).
 
@@ -89,6 +100,15 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
       .map((e) => [e.blobId!, e]),
   );
 
+  // The evidence reader's private details (when they opened): which files are kept originals, and what only she holds.
+  const priv = await loadPrivate(api, masterKey).catch(() => null);
+  const originalOf = new Map<string, string>(); // kept original's blob id -> the file it is the original of
+  if (priv && !priv.unreadable)
+    for (const [itemId, p] of Object.entries(priv.value.items)) {
+      const parent = [...itemByBlob.values()].find((e) => e.id === itemId);
+      if (p.originalBlobId && parent) originalOf.set(p.originalBlobId, parent.fileName);
+    }
+
   const entries: ZipEntry[] = [];
   const manifest: unknown[] = [];
   const problems: string[] = [];
@@ -96,7 +116,8 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
   for (const b of [...blobs].sort((x, y) => x.createdAt.localeCompare(y.createdAt))) {
     i++;
     const item = itemByBlob.get(b.id);
-    const name = `evidence/${String(i).padStart(3, '0')}-${safeFileName(item?.fileName ?? `${b.id}.bin`)}`;
+    const originalFor = originalOf.get(b.id);
+    const name = `evidence/${String(i).padStart(3, '0')}-${safeFileName(originalFor ? `original-of-${originalFor}` : (item?.fileName ?? `${b.id}.bin`))}`;
     try {
       const key = await blobKeyFor(b, masterKey);
       const { bytes, hash, verified } = await openEvidence(api, key, b.id, item?.sha256);
@@ -112,6 +133,36 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
       problems.push(`${item?.fileName ?? b.id}: could not be decrypted (${e instanceof Error ? e.message : 'unknown error'})`);
       manifest.push({ file: null, blobId: b.id, fileName: item?.fileName, error: 'could not be decrypted', addedToVaultAt: b.createdAt });
     }
+  }
+
+  if (priv && !priv.unreadable) {
+    const items = [...itemByBlob.values()];
+    const exhibits = buildExhibits(blobs, items, priv.value.items);
+    entries.push({ name: 'evidence/exhibit-list.csv', data: exhibitListCsv(exhibits), date: now });
+    entries.push({
+      name: 'evidence/private-details.json',
+      data: JSON.stringify(
+        {
+          exportedAt: at,
+          note: 'Private: the salts and hashes here are what let you show a salted fingerprint is yours. Keep this file as safe as the evidence itself.',
+          files: exhibits.map((e) => {
+            const p = priv.value.items[e.id];
+            return {
+              exhibit: e.number,
+              fileName: e.fileName,
+              ...(p?.originalSha256 && { originalSha256: p.originalSha256, salt: p.salt, saltedFingerprint: p.commitment }),
+              ...(p?.importedAt && { addedAt: p.importedAt }),
+              ...(p?.originalBlobId && { originalKept: true, originalFileBlobId: p.originalBlobId }),
+              ...(p?.derivedFrom && { redactedCopyOf: exhibits.find((x) => x.id === p.derivedFrom)?.number }),
+              ...(p?.ocr && { textRead: p.ocr.text, textReadWith: p.ocr.engine, textReadAt: p.ocr.at }),
+            };
+          }),
+        },
+        null,
+        2,
+      ) + '\n',
+      date: now,
+    });
   }
 
   const escrowLabels = __MATRA_MATCHING__
