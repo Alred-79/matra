@@ -31,6 +31,32 @@ function ortRuntimeFromModels(): Plugin {
 }
 
 /**
+ * The CPU JS glue of ONNX Runtime is built INTO the app (src/voice/worker.ts imports it with ?url, Vite emits it under
+ * /assets/ with a content hash). It is code ORT import()s by URL, so the browser cannot check it the way it checks the
+ * wasm; what ships must be the file pinned in src/ml/manifest.json. A build fails if the installed copy is not that file.
+ */
+function ortGluePinned(): Plugin {
+  return {
+    name: 'matra:ort-glue-pinned',
+    apply: 'build',
+    enforce: 'pre',
+    async buildStart() {
+      const { createHash } = await import('node:crypto');
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      const { createRequire } = await import('node:module');
+      const req = createRequire(import.meta.url);
+      for (const pin of manifest.runtime.bundled) {
+        const file = req.resolve(`onnxruntime-web/${pin.path}`);
+        const bytes = fs.readFileSync(file);
+        if (bytes.length !== pin.size || createHash('sha256').update(bytes).digest('hex') !== pin.sha256)
+          throw new Error(`${path.basename(file)} (built into the app) does not match the size/sha256 pinned in src/ml/manifest.json. Update the pin with the dependency, in one change.`);
+      }
+    },
+  };
+}
+
+/**
  * MATRA_MATCHING=off|on (one switch, also read by the app server; @matra/shared matching-mode.ts). Off — the pilot
  * default — builds the app WITHOUT sealed matching: `__MATRA_MATCHING__` is a literal false, so the matching screens,
  * the escrow and match-contact questions, the phone step, the counselor portal and their API calls are left out of the
@@ -186,7 +212,7 @@ function matraBuildInfo(): Plugin {
 }
 
 const config = {
-  plugins: [react(), matraBuildInfo()],
+  plugins: [react(), matraBuildInfo(), ortGluePinned()],
   define: {
     // a build without sealed matching carries only the org key (attorney directory), not the OPRF pin fields
     __MATRA_MATCH_PINS__: JSON.stringify(MATCHING_IN_BUILD ? matchPins : { rosterKey: matchPins.rosterKey }),

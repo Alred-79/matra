@@ -177,6 +177,9 @@ export function transcriberDevice(): Device | null {
 export async function isTranscriberSetUp(): Promise<boolean> {
   try {
     if (typeof caches === 'undefined') return false;
+    // caches.open() would CREATE an empty cache on every device that merely shows the voice screen (a trace on a shared
+    // device, W24), so look with caches.has() first: nothing is created until she chooses to set up.
+    if (!(await caches.has(CACHE_NAME)) || !(await caches.has(RUNTIME_CACHE_NAME))) return false;
     const cache = await caches.open(CACHE_NAME);
     for (const p of MODEL_WEIGHT_PATHS) if (!(await cache.match(p))) return false;
     // Presence only: the bytes are checked against their pinned hash when the worker loads them (src/ml/cache.ts).

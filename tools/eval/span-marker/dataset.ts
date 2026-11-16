@@ -50,6 +50,8 @@ interface RawLine {
 }
 
 function resolve(line: RawLine, l: { q: string; span: string }): LabelSpan {
+  // First occurrence only: a phrase repeated later in the same account is not labelled. That slightly lowers measured precision
+  // (a correct mark on the later copy counts as false) and slightly flatters the false-mark rate (a wrong mark on it is not seen).
   const start = line.text.indexOf(l.span);
   if (start < 0) throw new Error(`${line.id}: label span not found in the text: ${JSON.stringify(l.span)}`);
   const qs = l.q.split('|');

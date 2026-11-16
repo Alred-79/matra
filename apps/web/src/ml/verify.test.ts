@@ -42,7 +42,10 @@ describe('the real manifest', () => {
     expect(urls.some((u) => u.endsWith('/tokenizer.json'))).toBe(true);
     expect(urls.some((u) => u.endsWith('.onnx'))).toBe(true);
     expect(urls.filter((u) => u.endsWith('.wasm')).length).toBeGreaterThanOrEqual(2);
-    expect(urls.some((u) => u.endsWith('.mjs'))).toBe(true);
+    // the CPU glue is code the browser cannot check at run time, so it is built into the app instead of served from /models/
+    expect(urls.some((u) => u.endsWith('.mjs'))).toBe(false);
+    expect(MANIFEST.runtime.bundled.map((b) => b.role)).toEqual(['cpu-glue']);
+    expect(MANIFEST.runtime.bundled[0].sha256).toMatch(/^[0-9a-f]{64}$/);
   });
   it('uses neutral cache names: no app name, revision-scoped', () => {
     for (const n of cacheNames()) expect(n).toMatch(/^(speech-model|ml-runtime)-[0-9a-z]+$/);

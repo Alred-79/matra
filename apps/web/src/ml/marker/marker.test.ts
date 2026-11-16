@@ -139,3 +139,48 @@ describe('the flag and the local log', () => {
     expect(b.decisions()).toHaveLength(0);
   });
 });
+
+describe('long text (P5 review, minor 4: the guards were quadratic)', () => {
+  const t = (text: string) => {
+    const t0 = performance.now();
+    const marks = markCoverage(text, INTAKE_MARK_BANK, { now: NOW });
+    return { ms: performance.now() - t0, marks };
+  };
+  const cases: Array<[string, string]> = [
+    ['100k characters of unpunctuated fragments', 'I told my friend '.repeat(6000)],
+    ['100k characters of "a-"', 'a-'.repeat(50000)],
+    ['100k dots', '.'.repeat(100000)],
+    ['100k characters, one run-on sentence with dates and places', 'on March 14 at the diner and then '.repeat(3000)],
+    ['100k characters of apostrophes and quotes', `it's "the lake house" and 'x' `.repeat(4000)],
+  ];
+  for (const [name, text] of cases)
+    it(`${name} finishes in about a second, and its marks are exact`, () => {
+      expect(text.length).toBeGreaterThanOrEqual(90000);
+      const { ms, marks } = t(text);
+      expect(ms).toBeLessThan(2500); // ~1 s on a laptop; the margin is for a loaded CI runner
+      for (const m of marks) expect(text.slice(m.start, m.end)).toBe(m.exactSpan);
+    });
+});
+
+describe('reading a very long text in pieces', () => {
+  it('pieces cover the text exactly, contiguously, and never cut a surrogate pair', async () => {
+    const { pieces, WHOLE_LIMIT } = await import('./rules');
+    expect(pieces('short')).toEqual([[0, 5]]);
+    const t = 'I told my friend \u{1F600} on March 14. '.repeat(2000);
+    expect(t.length).toBeGreaterThan(WHOLE_LIMIT);
+    const ps = pieces(t);
+    expect(ps.length).toBeGreaterThan(1);
+    expect(ps[0][0]).toBe(0);
+    expect(ps.at(-1)![1]).toBe(t.length);
+    for (let i = 1; i < ps.length; i++) expect(ps[i][0]).toBe(ps[i - 1][1]);
+    for (const [, end] of ps.slice(0, -1)) expect(/[\ud800-\udbff]/.test(t[end - 1])).toBe(false);
+  });
+  it('a mention far into a long text still gets a mark with the right offsets', () => {
+    const filler = 'It was a quiet day and nothing else is worth noting here. '.repeat(500);
+    const text = `${filler}On March 14 I told my sister Dana. ${filler}`;
+    const marks = mark(text);
+    const m = marks.find((x) => x.questionId === 'people.told');
+    expect(m?.exactSpan).toBe('my sister Dana');
+    expect(text.slice(m!.start, m!.end)).toBe('my sister Dana');
+  });
+});

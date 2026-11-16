@@ -8,7 +8,10 @@
  *    remote model hosts and CDNs are disabled, so a misconfiguration fails closed instead of calling out;
  *  - every one of those files is pinned by size and SHA-256 in src/ml/manifest.json and checked here, in the browser,
  *    before it is used: on download and on every read from the cache. A file that does not match is refused, the
- *    load fails, and nothing falls back to an unchecked copy (src/ml/verify.ts, src/ml/cache.ts).
+ *    load fails, and nothing falls back to an unchecked copy (src/ml/verify.ts, src/ml/cache.ts);
+ *  - the one file the browser cannot check, because ONNX Runtime import()s it by URL (the CPU JS glue, which also starts
+ *    ORT's thread workers), is not fetched from /models/ at all: it is part of the app build, pinned at build time
+ *    (src/ml/ortPaths.ts, manifest.json "bundled"). A swapped /models/ort/*.mjs is never executed.
  */
 import { env, pipeline, Tensor, TextStreamer } from '@huggingface/transformers';
 import { isSilent, joinTranscripts, planChunks, resample, WHISPER_RATE } from './audio';
@@ -16,6 +19,9 @@ import type { Device, FromWorker, ToWorker } from './protocol';
 import { runtimeFile, type Pinned } from '../ml/manifest';
 import { loadPinnedFile, VerifiedCache } from '../ml/cache';
 import { defaultEnv, makeVerifiedFetch } from '../ml/verify';
+import { ortWasmPaths } from '../ml/ortPaths';
+// The CPU glue is part of the app build (a content-hashed file under /assets/), not a /models/ file: see ml/manifest.json.
+import ortGlueUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url';
 import { CACHE_NAME, MODELS_BASE, MODEL_ID, ORT_BASE, RUNTIME_CACHE_NAME, SPEECH, runtimeCacheKey } from './config';
 
 
@@ -109,16 +115,9 @@ async function load(prefer: Device | 'auto' = 'auto'): Promise<{ pipe: Asr; devi
   });
   fromCache = fromCache && wasmCached;
   onnx.wasm.wasmBinary = buf;
-  // CPU build: its matching JS glue from our origin. WebGPU build: the glue embedded in the bundle.
-  // The glue is code ONNX Runtime import()s by URL, and the page's CSP (script-src 'self', no blob:) means we cannot
-  // hand it the bytes we checked. So we check the file first and refuse to start if it does not match. The import
-  // then fetches the same URL again (usually the browser's HTTP cache); a host that serves a good file once and a bad
-  // one the next time is a host that can also rewrite this checker (threat model W4), so the release manifest, not
-  // this check, is the control for that case.
-  if (!gpu) await loadRuntime(runtimeFile('cpu-glue').path, () => {});
-  onnx.wasm.wasmPaths = gpu
-    ? { wasm: ORT_BASE + wasmFile.path }
-    : { mjs: ORT_BASE + runtimeFile('cpu-glue').path, wasm: ORT_BASE + wasmFile.path };
+  // CPU build: its matching JS glue, which is built into the app (src/ml/ortPaths.ts says why it is not a /models/ file).
+  // WebGPU build: the glue embedded in the bundle.
+  onnx.wasm.wasmPaths = ortWasmPaths({ gpu, wasmUrl: ORT_BASE + wasmFile.path, glueUrl: ortGlueUrl });
   onnx.wasm.proxy = false;
   // Threads need cross-origin isolation (SharedArrayBuffer, i.e. COOP + COEP headers). Without it: 1 thread, no warning.
   // (The WebGPU build's glue is bundled into this worker and cannot spawn its own thread workers, so it stays at 1.)

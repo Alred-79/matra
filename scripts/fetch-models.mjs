@@ -124,6 +124,14 @@ async function main() {
     process.exit(1);
   }
   const ortFiles = MANIFEST.runtime.files.map((f) => f.path);
+  // The CPU glue is built into the app, not served from /models/. Its installed copy must still be the pinned one.
+  for (const f of MANIFEST.runtime.bundled) {
+    if (!(await isGood(path.join(ortPkgDir, 'dist', f.path), f.size, f.sha256))) {
+      console.error(`  installed ${f.path} (built into the app) does not match the pinned size/sha256 in src/ml/manifest.json`);
+      process.exit(1);
+    }
+    console.log(`  ok        ${f.path} (${mb(f.size)}, built into the app)`);
+  }
   for (const f of MANIFEST.runtime.files) {
     const name = f.path;
     const src = path.join(ortPkgDir, 'dist', name);

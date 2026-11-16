@@ -6,14 +6,8 @@
     "version": "1.31.0-dev.20260914-8d85527a0",
     "base": "/models/ort/",
     "cacheName": "ml-runtime-20260914",
-    "$comment": "Copied from node_modules (the version the bundle was built against). cpu = plain build (JS glue + wasm); webgpu = the asyncify build, whose glue is embedded in the onnxruntime-web/webgpu bundle, so only its wasm is loaded.",
+    "$comment": "cpu-wasm and webgpu-wasm are fetched from /models/ort/ and checked in the browser. The CPU JS glue is code that ONNX Runtime import()s (and starts its pthread workers from) by URL, and the page's CSP has no blob:, so the browser cannot hand it bytes it checked. It is therefore NOT served from /models/: it is built INTO the app (worker.ts imports it with ?url, Vite emits it as a content-hashed file under /assets/ next to the JavaScript), and its pin below is checked at build time (vite.config.ts, scripts/fetch-models.mjs) and in the build audit (scripts/audit-web-build.mjs). Its trust is the app's own JavaScript (W4), not a browser-side check.",
     "files": [
-      {
-        "role": "cpu-glue",
-        "path": "ort-wasm-simd-threaded.mjs",
-        "size": 24381,
-        "sha256": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f"
-      },
       {
         "role": "cpu-wasm",
         "path": "ort-wasm-simd-threaded.wasm",
@@ -25,6 +19,14 @@
         "path": "ort-wasm-simd-threaded.asyncify.wasm",
         "size": 26861777,
         "sha256": "49871f5a4409519797e127440868a6d1923339d9185907f301a5b2a1d90af082"
+      }
+    ],
+    "bundled": [
+      {
+        "role": "cpu-glue",
+        "path": "ort-wasm-simd-threaded.mjs",
+        "size": 24381,
+        "sha256": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f"
       }
     ]
   },

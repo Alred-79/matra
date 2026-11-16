@@ -19,6 +19,7 @@ export async function makeManifest(files: { runtime: Uint8Array; weights: Uint8A
       version: 'test',
       base: '/models/ort/',
       cacheName: 'ml-runtime-test',
+      bundled: [],
       files: [{ role: 'cpu-wasm', path: 'rt.wasm', size: files.runtime.length, sha256: await sha256Hex(files.runtime) }],
     },
     models: [

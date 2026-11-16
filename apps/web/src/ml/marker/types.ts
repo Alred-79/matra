@@ -60,6 +60,8 @@ export type DropReason =
   | 'reported-speech'
   | 'other-actor'
   | 'sensitive-context'
+  | 'ambiguous-clause'
+  | 'split-character'
   | 'duplicate'
   | 'over-limit';
 

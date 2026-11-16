@@ -57,6 +57,34 @@ describe('validateMarks', () => {
     expect(r.droppedByReason['excluded-group']).toBe(1);
   });
 
+  it('drops a span that cuts a surrogate pair or a combining sequence (P5 review, major 2)', () => {
+    const t = 'I told my sister \u{1F600}Dana on March 14.';
+    const i = t.indexOf('Dana');
+    const mk = (start: number, end: number): MarkCandidate => ({ questionId: 'people.told', start, end, exactSpan: t.slice(start, end) });
+    // starts on the low half of the emoji ("\ude00Da"), ends on the high half ("\ud83d"), and the clean span
+    const r = validateMarks(t, INTAKE_MARK_BANK, [mk(i - 1, i + 2), mk(i - 2, i - 1), mk(i, i + 4)], null);
+    expect(r.marks.map((m) => m.exactSpan)).toEqual(['Dana']);
+    expect(r.droppedByReason['split-character']).toBe(2);
+    // NFD "Dana" + acute: ending after "Dana" and before the accent splits the letter from its mark
+    const nfd = 'I told my sister Dana\u0301 on March 14.';
+    const j = nfd.indexOf('Dana');
+    const cut = validateMarks(nfd, INTAKE_MARK_BANK, [{ questionId: 'people.told', start: j, end: j + 4, exactSpan: 'Dana' }], null);
+    expect(cut.marks).toEqual([]);
+    expect(cut.droppedByReason['split-character']).toBe(1);
+    const whole = validateMarks(nfd, INTAKE_MARK_BANK, [{ questionId: 'people.told', start: j, end: j + 5, exactSpan: 'Dana\u0301' }], null);
+    expect(whole.marks.map((m) => m.exactSpan)).toEqual(['Dana\u0301']);
+    // a ZWJ sequence and a flag are one character too
+    const fam = 'told \u{1F468}\u200D\u{1F469}\u200D\u{1F467} Dana';
+    const k = fam.indexOf('\u200D');
+    expect(validateMarks(fam, INTAKE_MARK_BANK, [{ questionId: 'people.told', start: 5, end: k + 1, exactSpan: fam.slice(5, k + 1) }], null).droppedByReason['split-character']).toBe(1);
+  });
+
+  it('the rule fallback gives the same answers without Intl.Segmenter', async () => {
+    const { isBoundaryByRule } = await import('./grapheme');
+    const t = 'a\u{1F600}b\u0301c';
+    expect([0, 1, 2, 3, 4, 5, 6].map((i) => isBoundaryByRule(t, i))).toEqual([true, true, false, true, false, true, true]);
+  });
+
   it('drops a span that is blank or a whole passage', () => {
     const t = `${'word '.repeat(60)}on March 14 `;
     const blank = validateMarks('a   b', INTAKE_MARK_BANK, [{ questionId: 'when.date', start: 1, end: 4, exactSpan: '   ' }]);

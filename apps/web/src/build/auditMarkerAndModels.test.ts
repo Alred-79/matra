@@ -47,6 +47,30 @@ describe('build audit: the span-marker is left out of a default build', () => {
     expect(ok.status).toBe(0);
     expect(ok.stdout).toMatch(/no span-marker code \(MATRA_MARKER=off\)/);
 
+    // The CPU ONNX Runtime glue is code the browser cannot check at run time, so it is built into the app as the pinned
+    // bytes, and the worker points ORT at that hashed asset, never at a /models/ file a host could swap.
+    const pin = manifest.runtime.bundled[0];
+    const glue = walk(out).filter((f) => path.relative(out, f).startsWith('assets/') && createHash('sha256').update(fs.readFileSync(f)).digest('hex') === pin.sha256);
+    expect(glue).toHaveLength(1);
+    const glueName = path.basename(glue[0]);
+    const worker = walk(out).filter((f) => /assets\/worker-.*\.js$/.test(f));
+    expect(worker.length).toBeGreaterThan(0);
+    for (const w of worker) {
+      const code = fs.readFileSync(w, 'utf8');
+      expect(code).toContain(`/assets/${glueName}`);
+      expect(code).not.toContain('/models/ort/ort-wasm-simd-threaded.mjs');
+    }
+    // a swapped /models/ glue is a build failure, and so is a tampered built-in copy
+    fs.mkdirSync(path.join(out, 'models/ort'), { recursive: true });
+    fs.writeFileSync(path.join(out, 'models/ort/ort-wasm-simd-threaded.mjs'), 'swapped');
+    expect(audit(out).stderr).toMatch(/must be built into the app, not served from \/models\//);
+    fs.rmSync(path.join(out, 'models'), { recursive: true });
+    const original = fs.readFileSync(glue[0]);
+    fs.appendFileSync(glue[0], '\n// swapped');
+    expect(audit(out).stderr).toMatch(/no file equal to the pinned ort-wasm-simd-threaded\.mjs/);
+    fs.writeFileSync(glue[0], original);
+    expect(audit(out).status).toBe(0);
+
     const js = walk(out).find((f) => f.endsWith('.js'))!;
     fs.appendFileSync(js, '\n;var x="understand-rules";\n');
     const bad = audit(out);

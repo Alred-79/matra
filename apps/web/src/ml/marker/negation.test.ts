@@ -38,6 +38,23 @@ const T: Array<[string, string, string, string | null]> = [
   ['My drink tasted strange at the party.', 'the party', 'where.place', 'sensitive-context'],
   ['He grabbed my wrist in the parking lot.', 'the parking lot', 'where.place', 'sensitive-context'],
   ['On March 14, he grabbed my wrist.', 'March 14', 'when.date', null],
+  // cases the first word list missed (P5 review, minor 3)
+  ['On March 14 at the Riverside Diner he had intercourse with me.', 'March 14', 'when.date', 'sensitive-context'],
+  ['On March 14 at the Riverside Diner he had intercourse with me.', 'the Riverside Diner', 'where.address', 'sensitive-context'],
+  ['He put pills in my glass at the Riverside Diner.', 'the Riverside Diner', 'where.address', 'sensitive-context'],
+  ['He stabbed me at the Riverside Diner.', 'the Riverside Diner', 'where.address', 'sensitive-context'],
+  ['He was on top of me at the Riverside Diner.', 'the Riverside Diner', 'where.address', 'sensitive-context'],
+  ['He held a pillow over my face at the lake house.', 'the lake house', 'where.place', 'sensitive-context'],
+  ['I told Dana he ejaculated on me at the Riverside Diner.', 'Dana', 'people.told', 'sensitive-context'],
+  ['I have photos of the marks on my arms from March 14.', 'have photos', 'evidence.upload', 'sensitive-context'],
+  ['I have photos of my thighs.', 'have photos', 'evidence.upload', 'sensitive-context'],
+  // fail safe: an action word nobody listed as plain makes the clause ambiguous, so the mark is dropped
+  ['He dragged me out of the Riverside Diner on March 14.', 'March 14', 'when.date', 'ambiguous-clause'],
+  ['We were walking past the Riverside Diner on March 14.', 'March 14', 'when.date', 'ambiguous-clause'],
+  ['He yanked something near the lake house.', 'the lake house', 'where.place', 'ambiguous-clause'],
+  ['It happened on March 14 at the Riverside Diner.', 'March 14', 'when.date', null],
+  ['I told my sister Dana the next morning.', 'my sister Dana', 'people.told', null],
+  ['I told my friend Fred on Sunday.', 'my friend Fred', 'people.told', null],
 ];
 
 describe('clause guards', () => {

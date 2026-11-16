@@ -76,7 +76,15 @@ function printReport(r: Report, items: EvalItem[], enabled: readonly string[], g
   for (const [g, f] of Object.entries(r.falseMarkRate)) out(`- ${g}: ${f.hits}/${f.forbid} = ${pct(f.rate)} (95% upper bound ${pct(f.upper95)})`);
   out(`\nvalidator drops (all neutral questions): ${JSON.stringify(r.droppedByReason)}`);
   const gate = applyGate(r, enabled);
-  out(`\n${gated ? 'GATE (plan 8.7) with the question list chosen on dev' : 'Gate checks on dev (informational: dev is what the marker was built against)'}: ${gate.pass ? 'PASS' : 'FAIL'}`);
+  out(
+    gated
+      ? `\nGATE CHECKS (a subset of plan 8.7) with the question list chosen on dev: ${gate.pass ? 'all pass' : 'FAIL'}`
+      : '\nGate checks on dev (no verdict: dev is what the marker was built against, so it says nothing about new accounts)',
+  );
+  if (gated)
+    out(
+      'NOT CHECKED by this harness, so even "all pass" would not mean the plan\'s gates passed: per-question kappa >= 0.6 (needs two annotators), the device budgets of 8.9 (cold load, 10 s on 2,000 words, 300 MB), results by length bucket and language, WASM vs WebGPU agreement, an advocate read of a sample of marks, and a held-out split nobody has looked at.',
+    );
   for (const c of gate.checks) out(`- [${c.ok ? 'ok' : 'FAIL'}] ${c.name}: ${c.value} (needs ${c.threshold})${c.note ? ` | ${c.note}` : ''}`);
   const worst = r.perItem.filter((p) => p.falseMarks.length || p.missed.length || p.forbidHits.length);
   if (worst.length && process.env.MATRA_EVAL_VERBOSE) {
@@ -93,6 +101,7 @@ function printReport(r: Report, items: EvalItem[], enabled: readonly string[], g
 
 out('# Span-marker eval (rule engine v1)');
 out(`Gate (plan 8.7): invented spans 0; sensitive marks 0; overall precision >= ${GATE.overallPrecision}; every enabled question >= ${GATE.perQuestionPrecision}; negation false-mark rate <= ${GATE.negationFalseMark}; recall reported (>= ${GATE.recallFloor} to be worth shipping).`);
+out('TEST SPLIT STATUS: SPENT. Its aggregate was looked at before and after tuning, and the engine has been changed since (guards, review fixes). Its numbers below are kept for the record; they are not an independent estimate. Only dev numbers are quoted for the latest changes.');
 out(`Questions enabled, chosen on dev only: ${enabledFromDev.join(', ') || 'none'}`);
 out(`Questions enabled in the code (apps/web/src/ml/marker/enabled.ts): ${ENABLED_QUESTIONS.join(', ')}`);
 if (enabledFromDev.join() !== [...ENABLED_QUESTIONS].sort().join()) out('NOTE: the list in enabled.ts differs from the one the dev split selects. Update enabled.ts, then re-run.');

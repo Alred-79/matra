@@ -13,7 +13,7 @@ export interface PinnedFile {
   sha256: string;
 }
 export interface RuntimeFile extends PinnedFile {
-  role: 'cpu-glue' | 'cpu-wasm' | 'webgpu-wasm';
+  role: 'cpu-wasm' | 'webgpu-wasm';
 }
 export interface ModelEntry {
   id: string;
@@ -26,9 +26,13 @@ export interface ModelEntry {
   cacheName: string;
   files: PinnedFile[];
 }
+/** A runtime file built into the app bundle rather than fetched at run time (checked at build time, not in the browser). */
+export interface BundledFile extends PinnedFile {
+  role: 'cpu-glue';
+}
 export interface Manifest {
   schema: 1;
-  runtime: { package: string; version: string; base: string; cacheName: string; files: RuntimeFile[] };
+  runtime: { package: string; version: string; base: string; cacheName: string; files: RuntimeFile[]; bundled: BundledFile[] };
   models: ModelEntry[];
 }
 
@@ -90,6 +94,13 @@ export function modelById(id: string, m: Manifest = MANIFEST): ModelEntry {
 export function runtimeFile(role: RuntimeFile['role'], m: Manifest = MANIFEST): RuntimeFile {
   const f = m.runtime.files.find((x) => x.role === role);
   if (!f) throw new Error(`runtime file ${role} is not in the manifest`);
+  return f;
+}
+
+/** The runtime file that is built into the app, for a role, or throws. */
+export function bundledFile(role: BundledFile['role'], m: Manifest = MANIFEST): BundledFile {
+  const f = m.runtime.bundled.find((x) => x.role === role);
+  if (!f) throw new Error(`bundled runtime file ${role} is not in the manifest`);
   return f;
 }
 

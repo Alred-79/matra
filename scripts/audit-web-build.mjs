@@ -18,6 +18,7 @@
  *     SHA-256, and nothing else is there. A dist/models without models (MATRA_SKIP_MODELS=1) is fine; a wrong or unlisted
  *     file is not: the browser would refuse it at run time, and an unlisted one should not be served at all.
  *
+ *  5b. The CPU ONNX Runtime JS glue (code the browser cannot check at run time) is built into the app as the pinned bytes.
  *  6. The span-marker (src/ml/marker) left out of a MATRA_MARKER=off build, which is the default: none of its strings is in
  *     any shipped file. It has no survivor-facing screen in this build, so "on" only matters for the dev-only preview.
  *
@@ -133,6 +134,20 @@ for (const f of files) {
 }
 for (const [h, where] of hosts)
   if (!(h in ALLOWED_HOSTS)) problems.push(`unexpected host ${h} in ${[...where].slice(0, 3).join(', ')}${where.size > 3 ? ' …' : ''}`);
+
+// 5b. the CPU ONNX Runtime glue is built into the app (the browser cannot check code it import()s by URL): the build
+// must contain exactly the pinned bytes, as a file under assets/, and no copy of it under /models/ (never served from there)
+{
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'apps/web/src/ml/manifest.json'), 'utf8'));
+  const all = walk(DIST);
+  // enforced for any build that ships the transcription worker (assets/worker-*.js); a page-only dist has nothing to check
+  const hasWorker = all.some((f) => /^assets\/worker-[^/]*\.js$/.test(rel(f)));
+  for (const pin of manifest.runtime.bundled) {
+    const hit = !hasWorker || all.find((f) => rel(f).startsWith('assets/') && fs.statSync(f).size === pin.size && createHash('sha256').update(fs.readFileSync(f)).digest('hex') === pin.sha256);
+    if (!hit) problems.push(`assets/: no file equal to the pinned ${pin.path} (size ${pin.size}, sha256 ${pin.sha256.slice(0, 12)}...) is built into the app`);
+    if (all.some((f) => rel(f).startsWith(`models/ort/${pin.path}`))) problems.push(`models/ort/${pin.path}: the glue must be built into the app, not served from /models/`);
+  }
+}
 
 // 5. models: exactly the pinned files, byte for byte
 {

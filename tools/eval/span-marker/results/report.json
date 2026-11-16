@@ -4,7 +4,6 @@
     "evidence.upload",
     "people.told",
     "people.witnesses",
-    "prior.any",
     "when.date",
     "when.time",
     "where.address",
@@ -14,7 +13,6 @@
     "evidence.upload",
     "people.told",
     "people.witnesses",
-    "prior.any",
     "when.date",
     "when.time",
     "where.address",
@@ -43,13 +41,13 @@
       },
       {
         "name": "overall precision (enabled questions)",
-        "value": "77.6%",
+        "value": "78.7%",
         "threshold": ">= 90.0%",
         "ok": false
       },
       {
         "name": "precision of every enabled question",
-        "value": "evidence.upload 83.3%, people.told 100.0%, people.witnesses 100.0%, prior.any 100.0%, when.date 61.5%, when.time 100.0%, where.address 100.0%, where.place 41.7%",
+        "value": "evidence.upload 83.3%, people.told 100.0%, people.witnesses 100.0%, when.date 61.5%, when.time 100.0%, where.address 100.0%, where.place 50.0%",
         "threshold": ">= 80.0% each",
         "ok": false
       },
@@ -62,7 +60,7 @@
       },
       {
         "name": "recall (enabled questions), reported",
-        "value": "64.7%",
+        "value": "58.1%",
         "threshold": ">= 50.0% to be worth shipping",
         "ok": true
       }
@@ -72,10 +70,10 @@
     "split": "dev",
     "items": 85,
     "overall": {
-      "marks": 71,
-      "correct": 66,
+      "marks": 69,
+      "correct": 64,
       "gold": 80,
-      "found": 64
+      "found": 63
     },
     "byQuestion": {
       "when.date": {
@@ -109,10 +107,10 @@
         "found": 4
       },
       "prior.any": {
-        "marks": 6,
-        "correct": 6,
+        "marks": 4,
+        "correct": 4,
         "gold": 6,
-        "found": 5
+        "found": 4
       },
       "evidence.upload": {
         "marks": 8,
@@ -135,10 +133,10 @@
     },
     "byCategory": {
       "plain": {
-        "marks": 35,
-        "correct": 34,
+        "marks": 33,
+        "correct": 32,
         "gold": 36,
-        "found": 33,
+        "found": 32,
         "forbid": 0,
         "forbidHits": 0,
         "itemsWithFalseMarks": 1,
@@ -252,11 +250,12 @@
       }
     },
     "droppedByReason": {
+      "ambiguous-clause": 3,
       "over-limit": 1,
       "negated": 6,
       "hypothetical": 4,
       "sensitive-group": 13,
-      "reported-speech": 4,
+      "reported-speech": 3,
       "quoted": 1,
       "other-actor": 6,
       "sensitive-context": 3
@@ -268,10 +267,10 @@
     "split": "test",
     "items": 79,
     "overall": {
-      "marks": 59,
-      "correct": 46,
+      "marks": 50,
+      "correct": 40,
       "gold": 71,
-      "found": 45
+      "found": 39
     },
     "byQuestion": {
       "when.date": {
@@ -281,10 +280,10 @@
         "found": 7
       },
       "where.place": {
-        "marks": 12,
-        "correct": 5,
-        "gold": 11,
-        "found": 5
+        "marks": 8,
+        "correct": 4,
+        "gold": 12,
+        "found": 4
       },
       "when.time": {
         "marks": 3,
@@ -299,16 +298,16 @@
         "found": 11
       },
       "people.witnesses": {
-        "marks": 3,
-        "correct": 3,
+        "marks": 1,
+        "correct": 1,
         "gold": 7,
-        "found": 3
+        "found": 1
       },
       "prior.any": {
-        "marks": 4,
-        "correct": 4,
+        "marks": 2,
+        "correct": 2,
         "gold": 6,
-        "found": 4
+        "found": 2
       },
       "evidence.upload": {
         "marks": 6,
@@ -317,10 +316,10 @@
         "found": 5
       },
       "where.address": {
-        "marks": 6,
-        "correct": 6,
-        "gold": 6,
-        "found": 6
+        "marks": 5,
+        "correct": 5,
+        "gold": 5,
+        "found": 5
       },
       "where.area": {
         "marks": 1,
@@ -331,13 +330,13 @@
     },
     "byCategory": {
       "plain": {
-        "marks": 27,
-        "correct": 24,
+        "marks": 22,
+        "correct": 20,
         "gold": 30,
-        "found": 23,
+        "found": 19,
         "forbid": 0,
         "forbidHits": 0,
-        "itemsWithFalseMarks": 3,
+        "itemsWithFalseMarks": 2,
         "items": 17
       },
       "fragmented": {
@@ -351,10 +350,10 @@
         "items": 8
       },
       "spelling": {
-        "marks": 5,
-        "correct": 4,
+        "marks": 3,
+        "correct": 2,
         "gold": 13,
-        "found": 4,
+        "found": 2,
         "forbid": 0,
         "forbidHits": 0,
         "itemsWithFalseMarks": 1,
@@ -391,23 +390,23 @@
         "items": 6
       },
       "other-actor": {
-        "marks": 4,
+        "marks": 3,
         "correct": 0,
         "gold": 0,
         "found": 0,
         "forbid": 6,
         "forbidHits": 1,
-        "itemsWithFalseMarks": 3,
+        "itemsWithFalseMarks": 2,
         "items": 6
       },
       "sensitive-trap": {
-        "marks": 6,
+        "marks": 5,
         "correct": 3,
         "gold": 7,
         "found": 3,
         "forbid": 0,
         "forbidHits": 0,
-        "itemsWithFalseMarks": 2,
+        "itemsWithFalseMarks": 1,
         "items": 5
       },
       "no-marks": {
@@ -449,11 +448,11 @@
     },
     "droppedByReason": {
       "sensitive-group": 12,
+      "ambiguous-clause": 12,
       "negated": 6,
       "hypothetical": 4,
       "quoted": 1,
-      "reported-speech": 2,
-      "other-actor": 3,
+      "other-actor": 2,
       "sensitive-context": 4
     },
     "sensitiveMarks": 0,
